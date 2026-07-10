@@ -34,7 +34,6 @@ public:
     QString activeChatPeer() const { return m_activeChatPeer; }
     void setActiveChatPeer(const QString &peer);
 
-    Q_INVOKABLE void startCall(const QString &targetName);
     Q_INVOKABLE void sendTextMessage(const QString &text);
     Q_INVOKABLE void saveNameToFile(const QString &name);
     Q_INVOKABLE void resetRegistration();
@@ -45,8 +44,17 @@ signals:
     void chatLogChanged();
     void activeChatPeerChanged();
 
-    // СИГНАЛ-ВСПЫШКА: Заставит QML автоматически распахнуть окно чата!
+    // ТЕКСТОВЫЙ ПЕЙДЖЕР: Сигнал автооткрытия окна чата
     void requestOpenChat(QString fromPeer);
+
+    // АКУСТИКА: Управляющие сигналы для дуплексного голосового моста
+    void callStarted();
+    void callEnded();
+    void sendAudioBlock(const QByteArray &audioData);
+
+public slots:
+    // СЛОТ ДЛЯ ПРИЕМА БАЙТ ЗВУКА С МИКРОФОНА
+    void sendAudioPacket(const QByteArray &audioData);
 
 private slots:
     void readPendingDatagrams();
