@@ -1,101 +1,86 @@
 #include "audioengine.h"
 #include <QDebug>
-#include <cmath>
+#include <QtMath>
+#include <QMediaDevices>
 
 AudioEngine::AudioEngine(QObject *parent)
-    : QIODevice(parent), m_audioSource(nullptr), m_audioSink(nullptr),
-    m_speakerDevice(nullptr), m_isAudioActive(false), m_micVolume(0.0)
+    : QIODevice(parent), m_audioSource(nullptr), m_audioSink(nullptr), m_micVolume(0.0)
 {
     m_format.setSampleRate(8000);
     m_format.setChannelCount(1);
     m_format.setSampleFormat(QAudioFormat::Int16);
-
-    // Открываем наше виртуальное устройство на запись, чтобы Qt 6 могла в него писать
-    open(QIODevice::WriteOnly);
-
-    startAudio();
+    open(QIODevice::ReadWrite);
 }
 
 AudioEngine::~AudioEngine() {
-    stopAudio();
+    stop();
 }
 
-bool AudioEngine::open(OpenMode mode) {
-    return QIODevice::open(mode);
-}
-
-void AudioEngine::close() {
-    QIODevice::close();
-}
-
-void AudioEngine::startAudio() {
-    if (m_isAudioActive) return;
-
-    qDebug() << "=== [АКУСТИКА] Инициализация конвейера Qt 6 ===";
-
-    m_audioSink = new QAudioSink(m_format, this);
-    m_speakerDevice = m_audioSink->start();
-
-    m_audioSource = new QAudioSource(m_format, this);
-    m_audioSource->setBufferSize(960);
-
-    // КРИТИЧЕСКИЙ ШАГ QT 6: Направляем поток микрофона прямо в наш класс!
-    m_audioSource->start(this);
-
-    m_isAudioActive = true;
-    qDebug() << "=== [АКУСТИКА] Сквозной аудио-тракт Qt 6 запущен!";
-}
-
-// ЭТОТ МЕТОД В QT 6 ВЫЗЫВАЕТСЯ АВТОМАТИЧЕСКИ ПРИ НАПОЛНЕНИИ БУФЕРА МИКРОФОНА
-qint64 AudioEngine::writeData(const char *data, qint64 len) {
-    if (!m_isAudioActive || len <= 0) return len;
-
-    QByteArray rawAudio(data, len);
-
-    // МАТЕМАТИЧЕСКИЙ РАСЧЕТ RMS ГРОМКОСТИ С ПРЯМОГО УСТРОЙСТВА
-    const int16_t *samples = reinterpret_cast<const int16_t*>(rawAudio.constData());
-    int sampleCount = rawAudio.size() / sizeof(int16_t);
-
-    double sum = 0.0;
-    for (int i = 0; i < sampleCount; ++i) {
-        double val = samples[i] / 32768.0;
-        sum += val * val;
-    }
-
-    double rms = 0.0;
-    if (sampleCount > 0) {
-        rms = std::sqrt(sum / sampleCount);
-    }
-
-    double newVolume = qMin(1.0, rms * 5.0);
-    if (std::abs(newVolume - m_micVolume) > 0.01) {
-        m_micVolume = newVolume;
-        emit micVolumeChanged();
-    }
-
-    // Выстреливаем байты звука в NetworkEngine
-    emit audioReadyToPacket(rawAudio);
-
-    return len;
-}
-
-void AudioEngine::handleIncomingAudio(const QByteArray &audioData) {
-    if (m_isAudioActive && m_speakerDevice && m_audioSink) {
-        if (m_audioSink->state() != QAudio::ActiveState) {
-            m_speakerDevice = m_audioSink->start();
-        }
-        m_speakerDevice->write(audioData);
-    }
-}
-
-void AudioEngine::stopAudio() {
-    if (!m_isAudioActive) return;
-    m_isAudioActive = false;
+void AudioEngine::start() {
+    stop();
+    qDebug() << "=== [АКУСТИКА] Аппаратный старт звуковой платы ===";
     m_micVolume = 0.0;
     emit micVolumeChanged();
 
-    if (m_audioSource) { m_audioSource->stop(); delete m_audioSource; m_audioSource = nullptr; }
-    if (m_audioSink) { m_audioSink->stop(); delete m_audioSink; m_audioSink = nullptr; }
-    m_speakerDevice = nullptr;
-    qDebug() << "=== [АКУСТИКА] Звук полностью заглушен.";
+    m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), m_format, this);
+    m_audioSource->setBufferSize(960);
+    m_audioSource->start(this);
+
+    m_audioSink = new QAudioSink(QMediaDevices::defaultAudioOutput(), m_format, this);
+    m_audioSink->setBufferSize(960);
+    m_audioSink->start(this);
+}
+
+void AudioEngine::stop() {
+    qDebug() << "=== [АКУСТИКА] Аппаратное отключение аудиоплат ===";
+    if (m_audioSource) { m_audioSource->stop(); m_audioSource->deleteLater(); m_audioSource = nullptr; }
+    if (m_audioSink) { m_audioSink->stop(); m_audioSink->deleteLater(); m_audioSink = nullptr; }
+    m_buffer.clear();
+    m_micVolume = 0.0;
+    emit micVolumeChanged();
+}
+void AudioEngine::playAudioBlock(const QByteArray &data) {
+    if (data.isEmpty()) return;
+    m_buffer.append(data);
+    emit readyRead(); // Будим QAudioSink в родном потоке звуковой карты!
+}
+
+qint64 AudioEngine::writeData(const char *data, qint64 len) {
+    if (len <= 0) return len;
+    QByteArray audioData(data, len);
+
+    // Вычисляем RMS
+    const qint16 *samples = reinterpret_cast<const qint16*>(audioData.constData());
+    int samplesCount = audioData.size() / sizeof(qint16);
+    double sum = 0;
+    for (int i = 0; i < samplesCount; ++i) sum += samples[i] * samples[i];
+    double rms = (samplesCount > 0) ? qSqrt(sum / samplesCount) : 0;
+
+    // Нормализуем RMS для полоски QML (переводим диапазон громкости в 0.0 - 1.0)
+    double normalized = rms / 32768.0 * 15.0; // Коэффициент усиления видимости полоски
+    if (normalized > 1.0) normalized = 1.0;
+
+    if (m_micVolume != normalized) {
+        m_micVolume = normalized;
+        emit micVolumeChanged(); // Полоска микрофона на экране Ивана мгновенно оживёт!
+    }
+
+    emit audioDataReady(audioData);
+    return len;
+}
+
+qint64 AudioEngine::readData(char *data, qint64 maxlen) {
+    // НАДЁЖНЫЙ JITTER-BUFFER: Не начинаем отдавать звук динамику,
+    // пока в памяти не накопится хотя бы 3 сетевых пакета (около 2500 байт).
+    // Это предотвращает Buffer Underrun и засыпание аудиоплаты!
+    if (m_buffer.size() < 2500) {
+        memset(data, 0, maxlen); // Поддерживаем таймер аудиокарты нулями
+        return maxlen;
+    }
+
+    qint64 chunk = qMin(static_cast<qint64>(m_buffer.size()), maxlen);
+    memcpy(data, m_buffer.constData(), chunk);
+    m_buffer.remove(0, chunk);
+
+    return chunk;
 }

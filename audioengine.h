@@ -2,47 +2,43 @@
 #define AUDIOENGINE_H
 
 #include <QIODevice>
-#include <QAudioFormat>
 #include <QAudioSource>
 #include <QAudioSink>
+#include <QAudioFormat>
+#include <QByteArray>
 
-// В Qt 6 для прямого захвата буфера наследуемся от QIODevice
 class AudioEngine : public QIODevice
 {
     Q_OBJECT
+    // Добавляем официальное свойство для прыгающей полоски микрофона в QML
     Q_PROPERTY(double micVolume READ micVolume NOTIFY micVolumeChanged)
 
 public:
     explicit AudioEngine(QObject *parent = nullptr);
     ~AudioEngine();
 
+    void start();
+    void stop();
+
     double micVolume() const { return m_micVolume; }
 
-    // Обязательные системные методы для QIODevice в Qt 6
-    bool open(OpenMode mode) override;
-    void close() override;
-    qint64 readData(char *data, qint64 maxlen) override { Q_UNUSED(data); Q_UNUSED(maxlen); return 0; }
-
-    // СЮДА ANDROID БУДЕТ СИЛОЙ СЛИВАТЬ БАЙТЫ МИКРОФОНА
-    qint64 writeData(const char *data, qint64 len) override;
+signals:
+    void audioDataReady(const QByteArray &data);
+    void micVolumeChanged();
 
 public slots:
-    void startAudio();
-    void stopAudio();
-    void handleIncomingAudio(const QByteArray &audioData);
+    void playAudioBlock(const QByteArray &data);
 
-signals:
-    void audioReadyToPacket(const QByteArray &audioData);
-    void micVolumeChanged();
+protected:
+    qint64 readData(char *data, qint64 maxlen) override;
+    qint64 writeData(const char *data, qint64 len) override;
 
 private:
     QAudioFormat m_format;
     QAudioSource *m_audioSource;
-    QAudioSink   *m_audioSink;
-    QIODevice    *m_speakerDevice;
-
-    bool m_isAudioActive;
-    double m_micVolume;
+    QAudioSink *m_audioSink;
+    QByteArray m_buffer;
+    double m_micVolume; // Хранилище уровня громкости
 };
 
 #endif // AUDIOENGINE_H

@@ -17,7 +17,7 @@ add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-fexec-charset=UTF-8>")
 # Подключаем сеть и мобильный звук
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick Network Multimedia)
 
-qt_add_executable(appTeleLoc
+qt_add_executable(appTeleLoc WIN32
     main.cpp
     networkengine.cpp networkengine.h
     audioengine.cpp audioengine.h
