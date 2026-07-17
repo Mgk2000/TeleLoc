@@ -6,11 +6,13 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QHostAddress>
+#include <QList>
+#include <QHash>
+#include <QSettings>
 #include "audioengine.h"
 
 struct OfflineMessage {
-    QString from;
-    QString to;
+    QString sender;
     QString text;
     QDateTime timestamp;
 };
@@ -18,76 +20,92 @@ struct OfflineMessage {
 class NetworkEngine : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QString myName READ myName WRITE setMyName NOTIFY myNameChanged)
-    Q_PROPERTY(bool isRegistered READ isRegistered NOTIFY isRegisteredChanged)
-    Q_PROPERTY(QString chatLog READ chatLog NOTIFY chatLogChanged)
-    Q_PROPERTY(QString activeChatPeer READ activeChatPeer WRITE setActiveChatPeer NOTIFY activeChatPeerChanged)
-    Q_PROPERTY(QString callStatus READ callStatus NOTIFY callStatusChanged)
+    Q_PROPERTY(QStringList peerList READ peerList NOTIFY peerListChanged)
 
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
+    ~NetworkEngine();
 
-    QString myName() const { return m_myName; }
-    void setMyName(const QString &name);
+    // Методы управления, доступные из QML
+    Q_INVOKABLE void start(const QString &username);
+    Q_INVOKABLE void sendMessage(const QString &text);
+    // Добавьте эту строчку:
+    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
+    Q_INVOKABLE void sendFile(const QString &filePath);
+    Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
+    Q_INVOKABLE void stopAudioCall();
 
-    bool isRegistered() const { return m_isRegistered; }
-
-    QString chatLog() const { return m_chatLog; }
-    void setActiveChatPeer(const QString &peer);
-
-    QString activeChatPeer() const { return m_activeChatPeer; }
-    QString callStatus() const { return m_callStatus; }
-
-    void setAudioEngine(AudioEngine *eng) { m_audioEngine = eng; }
-
-    Q_INVOKABLE void startCall(const QString &targetName);
-    Q_INVOKABLE void acceptCall();
-    Q_INVOKABLE void rejectOrEndCall();
-    Q_INVOKABLE void sendTextMessage(const QString &text);
-    Q_INVOKABLE void saveNameToFile(const QString &name);
+    // Новые методы для сохранения авторизации
+    Q_INVOKABLE bool isRegistered() const;
+    Q_INVOKABLE QString getSavedName() const;
+    Q_INVOKABLE void saveNameToFile(const QString &username);
     Q_INVOKABLE void resetRegistration();
-    Q_INVOKABLE void clearChatHistory(const QString &peer);
+    Q_INVOKABLE void startChatSession(const QString &targetPeer);
 
+    QStringList peerList() const;
+    // В секцию public:
+    Q_PROPERTY(int micLevel READ micLevel NOTIFY micLevelChanged)
+    Q_PROPERTY(int netLevel READ netLevel NOTIFY netLevelChanged)
+
+    int micLevel() const { return m_micLevel; }
+    int netLevel() const { return m_netLevel; }
 signals:
-    void sendAudioBlock(const QByteArray &audioData);
-
-    void myNameChanged();
-    void isRegisteredChanged();
-    void chatLogChanged();
-    void activeChatPeerChanged();
-    void callStatusChanged();
-
-    void callStarted();
+    void peerListChanged();
+    void messageReceived(const QString &senderName, const QString &text);
+    void fileReceived(const QString &senderName, const QString &fileName, const QByteArray &fileData);
+    void incomingCall(const QString &peerName);
+    void callAccepted();
+    void callRejected();
     void callEnded();
-    void requestOpenChat(QString fromPeer);
-
-public slots:
-    void sendAudioPacket(const QByteArray &audioData);
+    void requestOpenChat(const QString &peerName);
+    void micLevelChanged();
+    void netLevelChanged();
 
 private slots:
     void readPendingDatagrams();
-    void onPingTimer();
+    void sendHeartbeat();
+    void checkDeadPeers();
+    void handleAudioFrameReady(const QByteArray &frame);
 
 private:
-    QUdpSocket *m_socket;
-    quint16 m_port;
-    QString m_myName;
-    bool m_isRegistered;
-    QString m_chatLog;
-    QString m_activeChatPeer;
-    QString m_callStatus;
+    QUdpSocket *m_udpSocket = nullptr;
+    QUdpSocket *m_audioSocket = nullptr;
+    const QHostAddress m_multicastAddress;
+    const quint16 m_port = 45454;
+    const quint16 m_audioPort = 45455;
 
-    QTimer *m_pingTimer;
-    QList<OfflineMessage> m_offlineQueue;
-    AudioEngine *m_audioEngine;
+    QString m_username;
+    QTimer *m_heartbeatTimer = nullptr;
+    QTimer *m_expiryTimer = nullptr;
 
-    QHostAddress m_subnetBroadcast;
-    QHostAddress getRealHardwareAddress() const;
-    QString getConfigPath(const QString &fileName) const;
-    void loadNameFromFile();
-    void saveQueueToFile();
-    void loadQueueFromFile();
-    void cleanOldMessages();
+    struct PeerInfo {
+        QHostAddress address;
+        QDateTime lastSeen;
+    };
+    QHash<QString, PeerInfo> m_discoveredPeers;
+
+    AudioEngine *m_audioEngine = nullptr;
+    QString m_currentCallPeer;
+    bool m_inCall = false;
+
+    void broadcastDatagram(const QJsonObject &json);
+    void processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress);
+    void configureNetworkInterfaces();
+
+    // СПИСОК ДЛЯ ХРАНЕНИЯ НАЙДЕННЫХ БРОДКАСТ-АДРЕСОВ WI-FI
+    QList<QHostAddress> m_broadcastAddresses;
+    const quint16 m_tcpPort = 45456; // Новый выделенный порт для TCP-чата
+    QTcpServer *m_tcpServer = nullptr;
+
+    void initTcpServer();
+    QTcpSocket *m_ivanSocket = nullptr;
+    QTcpSocket *m_activeTunnel = nullptr;
+    int m_micLevel = 0;
+    int m_netLevel = 0;
+private slots:
+    void handleNewTcpConnection();
+    void handleTcpReadyRead();
+
 };
 
 #endif // NETWORKENGINE_H

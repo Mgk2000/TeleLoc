@@ -1,35 +1,72 @@
 import QtQuick
 import QtQuick.Controls
+import QtMultimedia
 
 Window {
     id: window
     width: 360
     height: 640
     visible: true
-    title: "TeleLoc"
-    color: "#f5f6fa"
+    title: "TeleLoc (Отладка)"
 
-    property real currentVolume: 0.0
-    property string activeScreen: "MAIN"
+    property string activeScreen: "LOGIN"
+    property string activeChatPeer: ""
+    property string callingPeer: ""
 
-    Connections {
-        target: _audioEngine
-        ignoreUnknownSignals: true
-        function onMicVolumeChanged() {
-            window.currentVolume = _audioEngine.micVolume
-        }
+    // Глобальное хранилище сообщений текущей сессии
+    ListModel {
+        id: chatModel
+    }
+
+    // Звуковой эффект для входящих сообщений
+    SoundEffect {
+        id: messageSound
+        source: "qrc:/sounds/message.wav"
     }
 
     Connections {
-        target: _networkEngine
+        target: netEngine
         ignoreUnknownSignals: true
-        function onRequestOpenChat(fromPeer) {
-            window.activeScreen = "CHAT"
+
+        function onRequestOpenChat(peerName) {
+            // Если запрос прилетел от кого-то другого (не от меня самого)
+            if (peerName !== netEngine.getSavedName()) {
+                window.activeChatPeer = peerName
+                window.activeScreen = "CHAT"
+                messageSound.play()
+            }
+        }
+
+        function onMessageReceived(sender, text) {
+            // Добавляем сообщение в модель списка с флагом авторства
+            chatModel.append({
+                "senderName": sender,
+                "messageText": text,
+                "isMe": (sender === netEngine.getSavedName())
+            })
+            if (sender !== netEngine.getSavedName()) {
+                messageSound.play()
+            }
+        }
+
+        function onIncomingCall(peer) {
+            window.callingPeer = peer
+            window.activeScreen = "INCOMING_CALL"
+        }
+        function onCallAccepted() {
+            window.activeScreen = "TALKING"
+        }
+        function onCallEnded() {
+            window.activeScreen = "MAIN"
+            window.callingPeer = ""
         }
     }
 
     Component.onCompleted: {
-        if (!_networkEngine.isRegistered) {
+        if (netEngine.isRegistered()) {
+            netEngine.start(netEngine.getSavedName())
+            window.activeScreen = "MAIN"
+        } else {
             window.activeScreen = "LOGIN"
         }
     }
@@ -42,41 +79,35 @@ Window {
         ListElement { name: "Анфиса" }
     }
 
+    // 1. ЭКРАН ЛОГИНА
     Item {
         anchors.fill: parent
-        visible: window.activeScreen === "LOGIN" && _networkEngine.callStatus === "IDLE"
-
+        visible: window.activeScreen === "LOGIN"
         Column {
             anchors.centerIn: parent
             width: parent.width * 0.85
-            spacing: 25
-
+            spacing: 20
             Text {
-                text: "Первый запуск\nВведите ваше имя"
-                font.pixelSize: 32
+                text: "TeleLoc\nЛокальный чат"
+                font.pixelSize: 28
                 font.bold: true
                 horizontalAlignment: Text.AlignHCenter
                 width: parent.width
-                color: "#2f3640"
             }
-
             TextField {
                 id: nameInput
                 width: parent.width
-                placeholderText: "Имя..."
-                font.pixelSize: 22
-                background: Rectangle { implicitHeight: 60; radius: 10; border.color: "#7f8fa6" }
+                placeholderText: "Введите ваше имя..."
+                font.pixelSize: 18
             }
-
             Button {
                 width: parent.width
-                height: 60
-                text: "Зарегистрировать гаджет"
-                contentItem: Text { text: parent.text; font.pixelSize: 22; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                background: Rectangle { color: "#00a8ff"; radius: 10 }
+                height: 50
+                text: "Войти в сеть"
                 onClicked: {
                     if (nameInput.text.trim() !== "") {
-                        _networkEngine.saveNameToFile(nameInput.text.trim())
+                        netEngine.saveNameToFile(nameInput.text.trim())
+                        netEngine.start(nameInput.text.trim())
                         window.activeScreen = "MAIN"
                     }
                 }
@@ -84,71 +115,74 @@ Window {
         }
     }
 
+    // 2. ГЛАВНЫЙ ЭКРАН (СПИСОК КОНТАКТОВ)
     Item {
         anchors.fill: parent
-        visible: window.activeScreen === "MAIN" && _networkEngine.callStatus === "IDLE"
-
+        visible: window.activeScreen === "MAIN"
         Column {
             anchors.fill: parent
             anchors.margins: 20
-            spacing: 20
-
+            spacing: 15
             Button {
                 text: "Сбросить регистрацию"
                 anchors.right: parent.right
                 onClicked: {
-                    _networkEngine.resetRegistration()
+                    netEngine.resetRegistration()
                     window.activeScreen = "LOGIN"
                 }
             }
-
+            Text {
+                text: "Список контактов:"
+                font.pixelSize: 20
+                font.bold: true
+            }
             ListView {
+                id: contactsListView
                 width: parent.width
-                height: parent.height - 150
+                height: parent.height - 120
                 model: contactsModel
-                spacing: 12
-
+                spacing: 10
                 delegate: Rectangle {
-                    width: parent.width
-                    visible: model.name !== _networkEngine.myName
-                    height: model.name !== _networkEngine.myName ? 80 : 0
-                    radius: 12
+                    property bool isMe: model.name === netEngine.getSavedName()
+
+                    width: contactsListView.width
+                    height: isMe ? 0 : 60
+                    visible: !isMe
+
                     color: "white"
                     border.color: "#dcdde1"
-                    border.width: 1
+                    radius: 8
 
                     Item {
                         anchors.fill: parent
-                        anchors.margins: 15
+                        anchors.margins: 10
+                        visible: !parent.isMe
 
                         Text {
                             text: model.name
-                            font.pixelSize: 24
+                            font.pixelSize: 18
                             font.bold: true
                             anchors.verticalCenter: parent.verticalCenter
-                            color: "#2f3640"
                         }
-
                         Row {
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 10
-
+                            spacing: 8
                             Button {
                                 text: "📝"
-                                contentItem: Text { text: parent.text; font.pixelSize: 26 }
-                                background: Rectangle { implicitWidth: 60; implicitHeight: 55; color: "#eccc68"; radius: 8 }
                                 onClicked: {
-                                    _networkEngine.activeChatPeer = model.name
-                                    window.activeScreen = "CHAT"
+                                    window.activeChatPeer = model.name
+                                    netEngine.startChatSession(model.name)
+                                    window.activeScreen = "CHAT" // Переключаем экран
                                 }
                             }
-
                             Button {
                                 text: "📞"
-                                contentItem: Text { text: parent.text; font.pixelSize: 26 }
-                                background: Rectangle { implicitWidth: 60; implicitHeight: 55; color: "#4cd137"; radius: 8 }
-                                onClicked: { _networkEngine.startCall(model.name) }
+                                onClicked: {
+                                    window.callingPeer = model.name
+                                    window.activeScreen = "OUTGOING_CALL"
+                                    netEngine.startAudioCall(model.name)
+                                }
                             }
                         }
                     }
@@ -156,78 +190,128 @@ Window {
             }
         }
     }
+    // 3. ЭКРАН ТЕКСТОВОГО ЧАТА (ЦВЕТНОЙ, С ПРОКРУТКОЙ И ОЧИСТКОЙ)
     Item {
+        id: chatWindow
         anchors.fill: parent
-        visible: window.activeScreen === "CHAT" && _networkEngine.callStatus === "IDLE"
+        visible: window.activeScreen === "CHAT"
 
         Column {
             anchors.fill: parent
-            anchors.margins: 20
-            spacing: 15
+            anchors.margins: 15
+            spacing: 10
 
+            // Верхняя панель управления чата
             Row {
                 width: parent.width
-                spacing: 10
+                height: 40
+                spacing: 12
 
                 Button {
                     text: "⬅ Назад"
-                    font.pixelSize: 16
-                    onClicked: { window.activeScreen = "MAIN" }
+                    width: 80
+                    height: 35
+                    onClicked: window.activeScreen = "MAIN" // Чистый возврат к списку
                 }
 
                 Text {
-                    text: "Чат: " + _networkEngine.activeChatPeer
-                    font.pixelSize: 20
+                    text: "Чат с: " + window.activeChatPeer
                     font.bold: true
+                    font.pixelSize: 18
                     anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 180
+                    elide: Text.ElideRight
                 }
-
-                Item { implicitWidth: 10; height: 1 }
 
                 Button {
-                    text: "🗑️ Чистить"
-                    font.pixelSize: 14
-                    onClicked: { _networkEngine.clearChatHistory(_networkEngine.activeChatPeer) }
+                    text: "Очистить"
+                    width: 80
+                    height: 35
+                    onClicked: chatModel.clear()
                 }
             }
 
+            // Окно сообщений с прокруткой (ListView)
             ScrollView {
+                id: chatScroll
                 width: parent.width
-                height: parent.height - 200
+                height: parent.height - 110
                 clip: true
-                background: Rectangle { color: "white"; radius: 10; border.color: "#dcdde1" }
 
-                TextArea {
-                    id: chatTextArea
-                    text: _networkEngine.chatLog
-                    font.pixelSize: 18
-                    readOnly: true
-                    wrapMode: TextArea.Wrap
-                    onTextChanged: { chatTextArea.cursorPosition = chatTextArea.text.length }
+                ListView {
+                    id: chatListView
+                    model: chatModel
+                    width: chatScroll.width
+                    spacing: 8
+                    // Принудительно удерживаем фокус внизу при добавлении сообщений
+                    onCountChanged: chatListView.positionViewAtEnd()
+
+                    delegate: Item {
+                        width: chatListView.width
+                        height: messageBubble.height + 4
+
+                        Rectangle {
+                            id: messageBubble
+                            // Подложка: светло-зеленая для "Вы", белая для собеседника
+                            color: model.isMe ? "#e8f5e9" : "#ffffff"
+                            border.color: model.isMe ? "#c8e6c9" : "#e0e0e0"
+                            border.width: 1
+                            radius: 8
+                            width: parent.width - 20
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            height: msgColumn.height + 12
+
+                            Column {
+                                id: msgColumn
+                                x: 10
+                                y: 6
+                                width: parent.width - 20
+                                spacing: 4
+
+                                Text {
+                                    // Меняем никнейм на "Вы:", если сообщение моё
+                                    text: model.isMe ? "Вы:" : model.senderName + ":"
+                                    font.bold: true
+                                    font.pixelSize: 14
+                                    // Автор — зелёный, собеседник — фиолетовый
+                                    color: model.isMe ? "#2e7d32" : "#6a1b9a"
+                                }
+
+                                Text {
+                                    text: model.messageText
+                                    color: "black"
+                                    font.pixelSize: 15
+                                    wrapMode: Text.Wrap
+                                    width: parent.width
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
+            // Нижняя панель: Поле ввода и кнопка ОК
             Row {
                 width: parent.width
+                height: 40
                 spacing: 10
 
                 TextField {
                     id: messageInput
-                    width: parent.width - 90
-                    placeholderText: "Сообщение..."
-                    font.pixelSize: 18
-                    background: Rectangle { implicitHeight: 50; radius: 8; border.color: "#7f8fa6" }
+                    width: parent.width - 80
+                    placeholderText: "Введите сообщение..."
+                    font.pixelSize: 16
+                    onAccepted: okButton.clicked() // Отправка по клавише Enter
                 }
 
                 Button {
-                    width: 80
-                    height: 50
-                    text: "Послать"
-                    contentItem: Text { text: parent.text; font.pixelSize: 16; font.bold: true; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: "#00a8ff"; radius: 8 }
+                    id: okButton
+                    text: "▶"
+                    width: 70
+                    height: parent.height
                     onClicked: {
                         if (messageInput.text.trim() !== "") {
-                            _networkEngine.sendTextMessage(messageInput.text.trim())
+                            netEngine.sendMessage(window.activeChatPeer, messageInput.text.trim())
                             messageInput.text = ""
                         }
                     }
@@ -236,88 +320,177 @@ Window {
         }
     }
 
-    Rectangle {
-        id: callScreen
+    // 4. ЭКРАН ИСХОДЯЩЕГО ВЫЗОВА
+    Item {
         anchors.fill: parent
-        color: "#1e272e"
-        visible: _networkEngine.callStatus !== "IDLE"
-
+        visible: window.activeScreen === "OUTGOING_CALL"
         Column {
             anchors.centerIn: parent
-            width: parent.width * 0.85
-            spacing: 40
-
+            spacing: 30
             Text {
-                text: _networkEngine.activeChatPeer
-                font.pixelSize: 42
+                text: "Вызов: " + window.callingPeer
+                font.pixelSize: 24
                 font.bold: true
-                color: "white"
                 horizontalAlignment: Text.AlignHCenter
-                width: parent.width
             }
-
             Text {
-                text: {
-                    if (_networkEngine.callStatus === "OUTGOING") return "Вызываю абонента..."
-                    if (_networkEngine.callStatus === "INCOMING") return "Входящий вызов..."
-                    if (_networkEngine.callStatus === "CONNECTED") return "Разговор..."
-                    return ""
-                }
-                font.pixelSize: 22
-                color: "#dcdde1"
-                horizontalAlignment: Text.AlignHCenter
-                width: parent.width
+                text: "Ожидание ответа..."
+                font.pixelSize: 18
+                color: "#7f8c8d"
             }
+            Button {
+                text: "Отмена"
+                width: 150
+                height: 50
+                onClicked: netEngine.stopAudioCall()
+            }
+        }
+    }
 
+    // 5. ЭКРАН ВХОДЯЩЕГО ВЫЗОВА
+    Item {
+        anchors.fill: parent
+        visible: window.activeScreen === "INCOMING_CALL"
+        Column {
+            anchors.centerIn: parent
+            spacing: 30
+            Text {
+                text: "Входящий звонок"
+                font.pixelSize: 24
+                color: "#e74c3c"
+                font.bold: true
+            }
+            Text {
+                text: window.callingPeer
+                font.pixelSize: 22
+                font.bold: true
+            }
             Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 40
-
+                spacing: 20
                 Button {
-                    id: acceptBtn
-                    text: "📞"
-                    visible: _networkEngine.callStatus === "INCOMING"
-                    contentItem: Text { text: parent.text; font.pixelSize: 32; color: "white" }
-                    background: Rectangle { implicitWidth: 85; implicitHeight: 80; radius: 40; color: "#4cd137" }
-                    onClicked: { _networkEngine.acceptCall() }
+                    text: "Ответить"
+                    width: 120
+                    height: 50
+                    onClicked: netEngine.startAudioCall(window.callingPeer)
                 }
-
                 Button {
-                    id: rejectBtn
-                    text: "❌"
-                    contentItem: Text { text: parent.text; font.pixelSize: 32; color: "white" }
-                    background: Rectangle { implicitWidth: 85; implicitHeight: 80; radius: 40; color: "#ff4757" }
-                    onClicked: { _networkEngine.rejectOrEndCall() }
+                    text: "Сбросить"
+                    width: 120
+                    height: 50
+                    onClicked: netEngine.stopAudioCall()
                 }
             }
         }
     }
 
-    Rectangle {
-        id: vuMeterContainer
-        width: parent.width - 40
-        height: 25
-        radius: 6
-        color: "#dcdde1"
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 15
-        anchors.horizontalCenter: parent.horizontalCenter
-        visible: _networkEngine.callStatus === "CONNECTED"
+    // 6. ЭКРАН АКТИВНОГО РАЗГОВОРА (ТЕЛЕФОН С ИНДИКАТОРАМИ ГРОМКОСТИ)
+    Item {
+        anchors.fill: parent
+        visible: window.activeScreen === "TALKING"
 
-        Rectangle {
-            height: parent.height
-            radius: 6
-            color: "#4cd137"
-            width: parent.width * window.currentVolume
-            Behavior on width { NumberAnimation { duration: 50 } }
-        }
-
-        Text {
-            text: "Микрофон"
-            font.pixelSize: 12
-            font.bold: true
-            color: "#2f3640"
+        Column {
             anchors.centerIn: parent
+            spacing: 30
+            width: parent.width * 0.85
+
+            Text {
+                text: "Разговор с: " + window.callingPeer
+                font.pixelSize: 24
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            Rectangle {
+                width: 100
+                height: 100
+                radius: 50
+                color: "#2ecc71"
+                anchors.horizontalCenter: parent.horizontalCenter
+                Text {
+                    text: "🎙"
+                    font.pixelSize: 40
+                    anchors.centerIn: parent
+                }
+            }
+
+            // Блок отладочных VU-метров громкости
+            Column {
+                width: parent.width
+                spacing: 12
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                // 1. Индикатор микрофона
+                Column {
+                    width: parent.width
+                    spacing: 4
+                    Text {
+                        text: "Микрофон (исходящий): " + netEngine.micLevel + "%"
+                        font.pixelSize: 13
+                        color: "#7f8c8d"
+                    }
+                    ProgressBar {
+                        id: micBar
+                        width: parent.width
+                        value: netEngine.micLevel / 100.0
+                        background: Rectangle { color: "#eee"; radius: 4; height: 10 }
+                        contentItem: Item {
+                            Rectangle {
+                                width: micBar.width * micBar.value
+                                height: 10
+                                color: "#3498db"
+                                radius: 4
+                            }
+                        }
+                    }
+                }
+
+                // 2. Индикатор сети
+                Column {
+                    width: parent.width
+                    spacing: 4
+                    Text {
+                        text: "Сеть (входящий звук): " + netEngine.netLevel + "%"
+                        font.pixelSize: 13
+                        color: "#7f8c8d"
+                    }
+                    ProgressBar {
+                        id: netBar
+                        width: parent.width
+                        value: netEngine.netLevel / 100.0
+                        background: Rectangle { color: "#eee"; radius: 4; height: 10 }
+                        contentItem: Item {
+                            Rectangle {
+                                width: netBar.width * netBar.value
+                                height: 10
+                                color: "#2ecc71"
+                                radius: 4
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Кнопка отбоя
+            Button {
+                text: "Завершить"
+                width: 180
+                height: 50
+                anchors.horizontalCenter: parent.horizontalCenter
+                background: Rectangle {
+                    color: "#e74c3c"
+                    radius: 6
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: "white"
+                    font.pixelSize: 16
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: netEngine.stopAudioCall()
+            }
         }
     }
 }

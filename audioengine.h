@@ -1,44 +1,42 @@
 #ifndef AUDIOENGINE_H
 #define AUDIOENGINE_H
-
-#include <QIODevice>
-#include <QAudioSource>
-#include <QAudioSink>
-#include <QAudioFormat>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QObject>
 #include <QByteArray>
+#include <QMediaCaptureSession>
+#include <QAudioInput>
+#include <QAudioSink>
+#include <QAudioSource>
+#include <QMediaDevices>
+#include <QAudioFormat>
+#include <QBuffer>
 
-class AudioEngine : public QIODevice
+class AudioEngine : public QObject
 {
     Q_OBJECT
-    // Добавляем официальное свойство для прыгающей полоски микрофона в QML
-    Q_PROPERTY(double micVolume READ micVolume NOTIFY micVolumeChanged)
-
 public:
     explicit AudioEngine(QObject *parent = nullptr);
     ~AudioEngine();
 
-    void start();
+    // Методы управления звуком, которые вызывает NetworkEngine
+    void startRecording();
+    void playFrame(const QByteArray &frame);
     void stop();
 
-    double micVolume() const { return m_micVolume; }
-
 signals:
-    void audioDataReady(const QByteArray &data);
-    void micVolumeChanged();
+    // Сигнал, сообщающий сети, что готов новый кусочек голоса с микрофона
+    void frameReady(const QByteArray &frame);
 
-public slots:
-    void playAudioBlock(const QByteArray &data);
-
-protected:
-    qint64 readData(char *data, qint64 maxlen) override;
-    qint64 writeData(const char *data, qint64 len) override;
+private slots:
+    void handleInputReady();
 
 private:
+    QAudioSource *m_audioSource = nullptr;
+    QAudioSink *m_audioSink = nullptr;
+    QIODevice *m_inputDevice = nullptr;
+    QIODevice *m_outputDevice = nullptr;
     QAudioFormat m_format;
-    QAudioSource *m_audioSource;
-    QAudioSink *m_audioSink;
-    QByteArray m_buffer;
-    double m_micVolume; // Хранилище уровня громкости
 };
 
 #endif // AUDIOENGINE_H

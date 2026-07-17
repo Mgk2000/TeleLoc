@@ -1,262 +1,446 @@
 #include "networkengine.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFile>
-#include <QStandardPaths>
-#include <QDir>
+#include <QFileInfo>
 #include <QNetworkInterface>
 #include <QDebug>
 
-NetworkEngine::NetworkEngine(QObject *parent)
-    : QObject(parent), m_port(45454), m_isRegistered(false), m_activeChatPeer(""), m_callStatus("IDLE"), m_audioEngine(nullptr)
+// 1. Изменяем конструктор (убираем мультикаст-адрес)
+NetworkEngine::NetworkEngine(QObject *parent) : QObject(parent)
 {
-    m_socket = new QUdpSocket(this);
-    m_socket->bind(QHostAddress::AnyIPv4, m_port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
-
-    m_subnetBroadcast = getRealHardwareAddress();
-
-    connect(m_socket, &QUdpSocket::readyRead, this, &NetworkEngine::readPendingDatagrams);
-    loadNameFromFile();
-    loadQueueFromFile();
-
-    m_pingTimer = new QTimer(this);
-    connect(m_pingTimer, &QTimer::timeout, this, &NetworkEngine::onPingTimer);
-    m_pingTimer->start(10000);
-}
-
-QHostAddress NetworkEngine::getRealHardwareAddress() const {
-    for (const QNetworkInterface &interface : QNetworkInterface::allInterfaces()) {
-        if (!(interface.flags() & QNetworkInterface::IsUp) || !(interface.flags() & QNetworkInterface::IsRunning)) continue;
-        if (interface.flags() & QNetworkInterface::IsLoopBack) continue;
-
-        QString name = interface.name().toLower();
-        QString desc = interface.humanReadableName().toLower();
-
-        if (name.contains("tun") || name.contains("tap") || name.contains("vpn") || name.contains("ppp") || desc.contains("vpn") || desc.contains("wireguard")) continue;
-
-        if (name.contains("wlan") || name.contains("wifi") || name.contains("usb") || name.contains("rndis") || name.contains("eth") || desc.contains("wireless") || desc.contains("wi-fi")) {
-            for (const QNetworkAddressEntry &entry : interface.addressEntries()) {
-                if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
-                    QHostAddress bcast = entry.broadcast();
-                    if (!bcast.isNull() && bcast != QHostAddress::Null) return bcast;
+    m_udpSocket = new QUdpSocket(this);
+    m_audioSocket = new QUdpSocket(this);
+    m_udpSocket->bind(QHostAddress::AnyIPv4, m_port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+    m_audioSocket->bind(QHostAddress::AnyIPv4, m_audioPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+    connect(m_udpSocket, &QUdpSocket::readyRead, this, &NetworkEngine::readPendingDatagrams);
+    connect(m_audioSocket, &QUdpSocket::readyRead, this, [this]() {
+        while (m_audioSocket->hasPendingDatagrams()) {
+            QByteArray datagram;
+            datagram.resize(m_audioSocket->pendingDatagramSize());
+            m_audioSocket->readDatagram(datagram.data(), datagram.size());
+            if (m_inCall && m_audioEngine) {
+                long long sumNet = 0;
+                const qint16 *samplesNet = reinterpret_cast<const qint16*>(datagram.constData());
+                int sampleCountNet = datagram.size() / 2;
+                for (int i = 0; i < sampleCountNet; ++i) {
+                    sumNet += samplesNet[i] * samplesNet[i];
                 }
+                int rmsNet = (sampleCountNet > 0) ? qSqrt(sumNet / sampleCountNet) : 0;
+                int newNetLevel = qMin(100, (rmsNet * 100) / 32767);
+                if (m_netLevel != newNetLevel) {
+                    m_netLevel = newNetLevel;
+                    emit netLevelChanged();
+                }
+                m_audioEngine->playFrame(datagram);
             }
         }
+    });
+    m_heartbeatTimer = new QTimer(this);
+    connect(m_heartbeatTimer, &QTimer::timeout, this, &NetworkEngine::sendHeartbeat);
+    m_expiryTimer = new QTimer(this);
+    connect(m_expiryTimer, &QTimer::timeout, this, &NetworkEngine::checkDeadPeers);
+    m_audioEngine = new AudioEngine(this);
+    connect(m_audioEngine, &AudioEngine::frameReady, this, &NetworkEngine::handleAudioFrameReady);
+}
+
+void NetworkEngine::sendMessage(const QString &text)
+{
+    if (text.isEmpty()) return;
+
+    QJsonObject json;
+    json["type"] = "message";
+    json["sender"] = m_username;
+    json["text"] = text;
+
+    // Если мы уже открыли чат с кем-то конкретным, помечаем получателя для VPN-пробивки
+    if (!m_currentCallPeer.isEmpty()) {
+        json["target_peer"] = m_currentCallPeer;
     }
-    return QHostAddress::Broadcast;
+
+    broadcastDatagram(json);
+    emit messageReceived(m_username, text);
 }
 
-QString NetworkEngine::getConfigPath(const QString &fileName) const {
-    QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(path);
-    return path + "/" + fileName;
-}
-
-void NetworkEngine::loadNameFromFile() {
-    QFile file(getConfigPath("teleloc.conf"));
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&file); m_myName = in.readAll().trimmed(); file.close();
-        if (!m_myName.isEmpty()) { m_isRegistered = true; emit myNameChanged(); emit isRegisteredChanged(); }
+void NetworkEngine::startAudioCall(const QString &targetPeerName)
+{
+    if (targetPeerName.isEmpty()) return;
+    if (m_currentCallPeer == targetPeerName && !m_inCall) {
+        m_inCall = true;
+        if (m_audioEngine) m_audioEngine->startRecording();
+        emit callAccepted();
+        QJsonObject json;
+        json["type"] = "call_accept";
+        json["sender"] = m_username;
+        broadcastDatagram(json);
+        return;
     }
+    m_currentCallPeer = targetPeerName;
+    QJsonObject json;
+    json["type"] = "call_start";
+    json["sender"] = m_username;
+    broadcastDatagram(json);
 }
-
-void NetworkEngine::saveNameToFile(const QString &name) {
-    if (name.trimmed().isEmpty()) return;
-    QFile file(getConfigPath("teleloc.conf"));
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&file); out << name.trimmed(); file.close();
-        m_myName = name.trimmed(); m_isRegistered = true;
-        emit myNameChanged(); emit isRegisteredChanged();
+void NetworkEngine::handleAudioFrameReady(const QByteArray &frame)
+{
+    if (frame.isEmpty() || !m_inCall || m_currentCallPeer.isEmpty()) return;
+    long long sum = 0;
+    const qint16 *samples = reinterpret_cast<const qint16*>(frame.constData());
+    int sampleCount = frame.size() / 2;
+    for (int i = 0; i < sampleCount; ++i) {
+        sum += samples[i] * samples[i];
     }
-}
-
-void NetworkEngine::setMyName(const QString &name) {
-    if (m_myName != name) { m_myName = name; emit myNameChanged(); }
-}
-
-void NetworkEngine::resetRegistration() {
-    rejectOrEndCall();
-    QFile file(getConfigPath("teleloc.conf")); file.remove();
-    m_myName = ""; m_isRegistered = false; m_chatLog = ""; m_activeChatPeer = "";
-    emit myNameChanged(); emit isRegisteredChanged(); emit chatLogChanged(); emit activeChatPeerChanged();
-}
-
-void NetworkEngine::cleanOldMessages() {
-    QDateTime now = QDateTime::currentDateTime(); auto it = m_offlineQueue.begin();
-    while (it != m_offlineQueue.end()) {
-        if (it->timestamp.secsTo(now) > 86400) { it = m_offlineQueue.erase(it); } else { ++it; }
+    int rms = (sampleCount > 0) ? qSqrt(sum / sampleCount) : 0;
+    int newMicLevel = qMin(100, (rms * 100) / 32767);
+    if (m_micLevel != newMicLevel) {
+        m_micLevel = newMicLevel;
+        emit micLevelChanged();
     }
-    if (m_offlineQueue.size() > 5) { while (m_offlineQueue.size() > 5) { m_offlineQueue.removeFirst(); } }
-}
-
-void NetworkEngine::setActiveChatPeer(const QString &peer) {
-    if (m_activeChatPeer != peer) {
-        m_activeChatPeer = peer; emit activeChatPeerChanged(); m_chatLog = "";
-        QFile file(getConfigPath("chat_" + peer + ".log"));
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) { QTextStream in(&file); m_chatLog = in.readAll(); file.close(); }
-        if (m_chatLog.isEmpty()) m_chatLog = QString("--- Начало чата с %1 ---\n").arg(peer);
-        emit chatLogChanged();
-    }
-}
-void NetworkEngine::clearChatHistory(const QString &peer) {
-    if (peer.isEmpty()) return;
-    QFile file(getConfigPath("chat_" + peer + ".log"));
-    file.remove();
-    m_chatLog = QString("--- Начало чата с %1 ---\n").arg(peer);
-    emit chatLogChanged();
-}
-
-void NetworkEngine::sendAudioPacket(const QByteArray &audioData) {
-    if (m_myName.isEmpty() || m_activeChatPeer.isEmpty() || m_callStatus != "CONNECTED") return;
-    // Формат пакета: AUDIO:ОТ_КОГО:КОМУ:СЫРЫЕ_БАЙТЫ
-    QByteArray datagram = "AUDIO:" + m_myName.toUtf8() + ":" + m_activeChatPeer.toUtf8() + ":" + audioData;
-    m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
-}
-
-void NetworkEngine::startCall(const QString &targetName) {
-    if (m_myName.isEmpty() || targetName.isEmpty() || m_callStatus != "IDLE") return;
-    m_activeChatPeer = targetName; m_callStatus = "OUTGOING"; emit activeChatPeerChanged(); emit callStatusChanged();
-    QByteArray datagram = "CALL_REQ:" + m_myName.toUtf8() + ":" + targetName.toUtf8();
-    m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
-}
-
-void NetworkEngine::acceptCall() {
-    if (m_callStatus != "INCOMING" || m_activeChatPeer.isEmpty()) return;
-    m_callStatus = "CONNECTED"; emit callStatusChanged(); emit callStarted();
-    QByteArray datagram = "CALL_ACCEPT:" + m_myName.toUtf8() + ":" + m_activeChatPeer.toUtf8();
-    m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
-}
-
-void NetworkEngine::rejectOrEndCall() {
-    if (m_callStatus == "IDLE") return;
-    if (m_audioEngine) m_audioEngine->stop();
-    QByteArray datagram = "CALL_REJECT:" + m_myName.toUtf8() + ":" + m_activeChatPeer.toUtf8();
-    m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
-    m_callStatus = "IDLE"; m_activeChatPeer = ""; emit callStatusChanged(); emit activeChatPeerChanged(); emit callEnded();
-}
-void NetworkEngine::sendTextMessage(const QString &text) {
-    if (m_myName.isEmpty() || m_activeChatPeer.isEmpty() || text.trimmed().isEmpty()) return;
-    QString msgText = text.trimmed(); QString formattedLine = QString("[Вы]: %1\n").arg(msgText);
-    m_chatLog += formattedLine; emit chatLogChanged();
-    QFile file(getConfigPath("chat_" + m_activeChatPeer + ".log"));
-    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) { QTextStream out(&file); out << formattedLine; file.close(); }
-
-    QByteArray datagram = "TEXT_MSG:" + m_myName.toUtf8() + ":" + m_activeChatPeer.toUtf8() + ":" + msgText.toUtf8();
-    m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
-
-    OfflineMessage newMsg = { m_myName, m_activeChatPeer, msgText, QDateTime::currentDateTime() };
-    m_offlineQueue.append(newMsg); cleanOldMessages(); saveQueueToFile();
-}
-
-void NetworkEngine::onPingTimer() {
-    if (m_myName.isEmpty() || m_offlineQueue.isEmpty()) return;
-    cleanOldMessages();
-    for (const auto &msg : m_offlineQueue) {
-        QByteArray datagram = "PING_REQ:" + m_myName.toUtf8() + ":" + msg.to.toUtf8();
-        m_socket->writeDatagram(datagram, m_subnetBroadcast, m_port);
+    if (m_discoveredPeers.contains(m_currentCallPeer)) {
+        QHostAddress peerIp = m_discoveredPeers[m_currentCallPeer].address;
+        bool ok;
+        quint32 ipv4 = peerIp.toIPv4Address(&ok);
+        if (ok) {
+            peerIp = QHostAddress(ipv4);
+        }
+        m_audioSocket->writeDatagram(frame, peerIp, m_audioPort);
     }
 }
+void NetworkEngine::configureNetworkInterfaces()
+{
+    m_broadcastAddresses.clear();
+    qDebug() << "=== СКАНИРОВАНИЕ СЕТЕВЫХ ИНТЕРФЕЙСОВ ДЛЯ ОБХОДА VPN ===";
 
-void NetworkEngine::saveQueueToFile() {
-    QFile file(getConfigPath("pending_messages.conf"));
-    if (file.open(QIODevice::WriteOnly)) {
-        QDataStream out(&file); out.setVersion(QDataStream::Qt_6_5); out << m_offlineQueue.size();
-        for (const auto &msg : m_offlineQueue) out << msg.from << msg.to << msg.text << msg.timestamp;
-        file.close();
-    }
-}
-
-void NetworkEngine::loadQueueFromFile() {
-    QFile file(getConfigPath("pending_messages.conf"));
-    if (file.open(QIODevice::ReadOnly)) {
-        QDataStream in(&file); in.setVersion(QDataStream::Qt_6_5); int size = 0; in >> size; m_offlineQueue.clear();
-        for (int i = 0; i < size; ++i) { OfflineMessage msg; in >> msg.from >> msg.to >> msg.text >> msg.timestamp; m_offlineQueue.append(msg); }
-        file.close(); cleanOldMessages();
-    }
-}
-
-void NetworkEngine::readPendingDatagrams() {
-    while (m_socket->hasPendingDatagrams()) {
-        QByteArray datagram; datagram.resize(m_socket->pendingDatagramSize());
-        m_socket->readDatagram(datagram.data(), datagram.size());
-        if (datagram.isEmpty()) continue;
-
-        // ВЫСОКОСКОРОСТНОЙ АНАЛИЗ СЫРЫХ БАЙТ (Индексы на месте, защищены от сдвигов Qt)
-        if (datagram.startsWith("AUDIO:")) {
-            if (m_callStatus == "CONNECTED") {
-                int firstColon = 6;
-                int secondColon = datagram.indexOf(':', firstColon);
-                int thirdColon = datagram.indexOf(':', secondColon + 1);
-                if (secondColon > 0 && thirdColon > 0) {
-                    QString from = QString::fromUtf8(datagram.mid(firstColon, secondColon - firstColon));
-                    if (m_activeChatPeer == from) {
-                        QByteArray audioBytes = datagram.mid(thirdColon + 1);
-                        if (m_audioEngine) m_audioEngine->playAudioBlock(audioBytes);
-                    }
-                }
-            }
+    QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface &iface : interfaces) {
+        // Пропускаем выключенные, петлевые (loopback) карты
+        if (!iface.isValid() || !(iface.flags() & QNetworkInterface::IsUp) || (iface.flags() & QNetworkInterface::IsLoopBack)) {
             continue;
         }
 
-        // РАЗБОР СИГНАЛЬНЫХ СТРОК АТС
-        QString rawStr = QString::fromUtf8(datagram);
-        QStringList parts = rawStr.split(":");
-        if (parts.size() < 3) continue;
+        QString name = iface.name().toLower();
+        QString desc = iface.humanReadableName().toLower();
 
-        QString type = parts[0];
-        QString from = parts[1];
-        QString to = parts[2];
-        if (from == m_myName) continue;
+        // Жестко отсекаем виртуальные адаптеры VPN
+        if (name.contains("tun") || name.contains("tap") || name.contains("vpn") || name.contains("ppp") || name.contains("p2p") ||
+            desc.contains("tun") || desc.contains("tap") || desc.contains("vpn") || desc.contains("virtual")) {
+            qDebug() << "Игнорируем VPN интерфейс:" << iface.humanReadableName();
+            continue;
+        }
 
-        if (type == "CALL_REQ") {
-            if (to != m_myName) continue;
-            if (m_callStatus == "IDLE") {
-                m_activeChatPeer = from; m_callStatus = "INCOMING";
-                emit activeChatPeerChanged(); emit callStatusChanged();
-            } else {
-                QByteArray dReject = "CALL_REJECT:" + m_myName.toUtf8() + ":" + from.toUtf8();
-                m_socket->writeDatagram(dReject, m_subnetBroadcast, m_port);
+        // Ищем реальный IPv4 бродкаст-адрес подсети (например, 192.168.1.255)
+        QList<QNetworkAddressEntry> entries = iface.addressEntries();
+        for (const QNetworkAddressEntry &entry : entries) {
+            QHostAddress bcast = entry.broadcast();
+            if (!bcast.isNull() && bcast.protocol() == QAbstractSocket::IPv4Protocol) {
+                // Сохраняем этот адрес в наш список
+                m_broadcastAddresses.append(bcast);
+                qDebug() << "Найден физический адрес бродкаста:" << bcast.toString() << "на карте:" << iface.humanReadableName();
             }
         }
-        else if (type == "CALL_ACCEPT") {
-            if (to != m_myName) continue;
-            if (m_callStatus == "OUTGOING" && m_activeChatPeer == from) {
-                m_callStatus = "CONNECTED"; emit callStatusChanged(); emit callStarted();
-            }
-        }
-        else if (type == "CALL_REJECT") {
-            if (to != m_myName) continue;
-            if (m_activeChatPeer == from) {
-                if (m_audioEngine) m_audioEngine->stop();
-                m_callStatus = "IDLE"; m_activeChatPeer = "";
-                emit callStatusChanged(); emit activeChatPeerChanged(); emit callEnded();
-            }
-        }
-        else if (type == "TEXT_MSG" && parts.size() >= 4) {
-            if (to != m_myName) continue;
-            QString text = parts[3];
-            QString formattedLine = QString("[%1]: %2\n").arg(from, text);
-            QFile file(getConfigPath("chat_" + from + ".log"));
-            if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) { QTextStream out(&file); out << formattedLine; file.close(); }
+    }
 
-            if (m_activeChatPeer != from) {
-                m_activeChatPeer = from; emit activeChatPeerChanged();
-                m_chatLog = formattedLine; emit chatLogChanged();
-            } else {
-                m_chatLog += formattedLine; emit chatLogChanged();
-            }
-        }
-        else if (type == "PING_REQ") {
-            if (to != m_myName) continue;
-            QByteArray dPong = "PING_PONG:" + m_myName.toUtf8() + ":" + from.toUtf8();
-            m_socket->writeDatagram(dPong, m_subnetBroadcast, m_port);
-        }
-        else if (type == "PING_PONG") {
-            if (to != m_myName) continue;
-            for (const auto &msg : m_offlineQueue) {
-                if (msg.to == from) {
-                    QByteArray dMsg = "TEXT_MSG:" + m_myName.toUtf8() + ":" + from.toUtf8() + ":" + msg.text.toUtf8();
-                    m_socket->writeDatagram(dMsg, m_subnetBroadcast, m_port);
+    // Если вдруг роутер не отдал бродкаст подсети, добавляем общий резервный бродкаст
+    if (m_broadcastAddresses.isEmpty()) {
+        m_broadcastAddresses.append(QHostAddress::Broadcast);
+        qDebug() << "Физические подсети не найдены. Используем общий бродкаст 255.255.255.255";
+    }
+}
+
+// 2. ОПТИМИЗИРОВАННЫЙ МЕТОД ОТПРАВКИ СООБЩЕНИЙ
+void NetworkEngine::broadcastDatagram(const QJsonObject &json)
+{
+    QJsonDocument doc(json);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
+    QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface &interface : interfaces) {
+        if (interface.flags().testFlag(QNetworkInterface::IsUp) && !interface.flags().testFlag(QNetworkInterface::IsLoopBack)) {
+            QList<QNetworkAddressEntry> entries = interface.addressEntries();
+            for (const QNetworkAddressEntry &entry : entries) {
+                QHostAddress broadcastAddress = entry.broadcast();
+                if (!broadcastAddress.isNull() && broadcastAddress.protocol() == QAbstractSocket::IPv4Protocol) {
+                    m_udpSocket->writeDatagram(data, broadcastAddress, m_port);
                 }
             }
         }
     }
 }
+
+// 3. ОПТИМИЗИРОВАННЫЙ МЕТОД ОТПРАВКИ ЗВУКА РАЦИИ
+
+NetworkEngine::~NetworkEngine()
+{
+    stopAudioCall();
+}
+
+
+void NetworkEngine::start(const QString &username)
+{
+    m_username = username;
+    // Запускаем сканирование бродкаст-адресов подсетей
+    configureNetworkInterfaces();
+
+    // Запускаем фоновый TCP сервер на том же Wi-Fi адресе
+    initTcpServer();
+
+    m_heartbeatTimer->start(2000);
+    m_expiryTimer->start(5000);
+    sendHeartbeat();
+}
+
+void NetworkEngine::sendFile(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) return;
+    QFileInfo fileInfo(filePath);
+    QJsonObject json;
+    json["type"] = "file";
+    json["sender"] = m_username;
+    json["fileName"] = fileInfo.fileName();
+    json["fileData"] = QString::fromLatin1(file.readAll().toBase64());
+    broadcastDatagram(json);
+}
+
+void NetworkEngine::checkDeadPeers()
+{
+    QDateTime now = QDateTime::currentDateTime();
+    bool changed = false;
+    auto it = m_discoveredPeers.begin();
+    while (it != m_discoveredPeers.end()) {
+        if (it.value().lastSeen.secsTo(now) > 6) {
+            it = m_discoveredPeers.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    if (changed) emit peerListChanged();
+}
+
+QStringList NetworkEngine::peerList() const
+{
+    return m_discoveredPeers.keys();
+}
+
+bool NetworkEngine::isRegistered() const
+{
+    QSettings settings("TeleLocCompany", "TeleLocApp");
+    return settings.contains("username") && !settings.value("username").toString().isEmpty();
+}
+
+QString NetworkEngine::getSavedName() const
+{
+    QSettings settings("TeleLocCompany", "TeleLocApp");
+    return settings.value("username", "").toString();
+}
+
+void NetworkEngine::saveNameToFile(const QString &username)
+{
+    QSettings settings("TeleLocCompany", "TeleLocApp");
+    settings.setValue("username", username);
+    m_username = username;
+}
+
+void NetworkEngine::resetRegistration()
+{
+    QSettings settings("TeleLocCompany", "TeleLocApp");
+    settings.remove("username");
+    m_username.clear();
+    if (m_heartbeatTimer) m_heartbeatTimer->stop();
+    if (m_expiryTimer) m_expiryTimer->stop();
+    m_discoveredPeers.clear();
+    emit peerListChanged();
+}
+
+void NetworkEngine::readPendingDatagrams()
+{
+    while (m_udpSocket->hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(m_udpSocket->pendingDatagramSize());
+        qDebug() << "dtagram="  << datagram;
+        QHostAddress senderAddress;
+        quint16 senderPort;
+
+        m_udpSocket->readDatagram(datagram.data(), datagram.size(), &senderAddress, &senderPort);
+
+        QJsonDocument doc = QJsonDocument::fromJson(datagram);
+        if (!doc.isNull() && doc.isObject()) {
+            processJsonMessage(doc.object(), senderAddress);
+        }
+    }
+}
+
+void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress)
+{
+    QString type = json["type"].toString();
+    qDebug() << "processJsonMessage(" << type;
+    QString senderName = json["sender"].toString();
+    if (senderName == m_username || senderName.isEmpty()) return;
+    if (type == "heartbeat") {
+        m_discoveredPeers[senderName] = PeerInfo{senderAddress, QDateTime::currentDateTime()};
+        emit peerListChanged();
+    } else if (type == "request_open_chat") {
+        QString target = json["target_peer"].toString();
+        if (target == m_username) {
+            emit requestOpenChat(senderName);
+        }
+    } else if (type == "call_start") {
+        m_currentCallPeer = senderName;
+        emit incomingCall(senderName);
+    } else if (type == "call_accept") {
+        m_inCall = true;
+        m_currentCallPeer = senderName;
+        if (m_audioEngine) m_audioEngine->startRecording();
+        emit callAccepted();
+    } else if (type == "call_end") {
+        m_inCall = false;
+        if (m_audioEngine) m_audioEngine->stop();
+        m_currentCallPeer = "";
+        emit callEnded();
+    }
+}
+void NetworkEngine::stopAudioCall()
+{
+    m_inCall = false;
+    if (m_audioEngine) m_audioEngine->stop();
+    QJsonObject json;
+    json["type"] = "call_end";
+    json["sender"] = m_username;
+    broadcastDatagram(json);
+    m_currentCallPeer = "";
+    emit callEnded();
+}
+void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text)
+{
+    if (text.isEmpty()) return;
+
+    QJsonObject json;
+    json["type"] = "message";
+    json["sender"] = m_username;
+    json["text"] = text;
+    json["target_peer"] = targetPeer;
+
+    QJsonDocument doc(json);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
+
+#ifdef _WIN32
+    if (m_activeTunnel && m_activeTunnel->state() == QAbstractSocket::ConnectedState) {
+        m_activeTunnel->write(data);
+        m_activeTunnel->flush();
+    } else {
+        broadcastDatagram(json);
+    }
+#else
+    broadcastDatagram(json);
+#endif
+
+    emit messageReceived(m_username, text);
+}
+// 2. Метод фонового поддержания туннеля (Иван постоянно стучится к Анфисе)
+void NetworkEngine::sendHeartbeat()
+{
+    QJsonObject json;
+    json["type"] = "heartbeat";
+    json["sender"] = m_username;
+    broadcastDatagram(json);
+
+#ifndef _WIN32
+    // Автоматически ищем пиров в таблице вместо жесткого IP
+    auto it = m_discoveredPeers.begin();
+    while (it != m_discoveredPeers.end()) {
+        QHostAddress peerIp = it.value().address;
+
+        // Пропускаем петлю обратной связи (себя)
+        if (peerIp == QHostAddress::LocalHost || peerIp == QHostAddress::LocalHostIPv6) {
+            ++it;
+            continue;
+        }
+
+        if (!m_activeTunnel) {
+            m_activeTunnel = new QTcpSocket(this);
+            connect(m_activeTunnel, &QTcpSocket::readyRead, this, &NetworkEngine::handleTcpReadyRead);
+            connect(m_activeTunnel, &QTcpSocket::disconnected, m_activeTunnel, &QTcpSocket::deleteLater);
+        }
+
+        if (m_activeTunnel->state() == QAbstractSocket::UnconnectedState) {
+            m_activeTunnel->connectToHost(peerIp, m_tcpPort);
+        }
+        break; // Удерживаем одно активное локальное подключение
+    }
+#endif
+}
+void NetworkEngine::initTcpServer()
+{
+    m_tcpServer = new QTcpServer(this);
+
+    // Слушаем абсолютно все интерфейсы без привязки к конкретному Wi-Fi IP
+    if (!m_tcpServer->listen(QHostAddress::AnyIPv4, m_tcpPort)) {
+        qWarning() << "Не удалось запустить TCP-сервер:" << m_tcpServer->errorString();
+    } else {
+        qDebug() << "=== TCP СЕРВЕР TeleLoc ЗАПУЩЕН ===";
+        qDebug() << "Слушаем адрес: AnyIPv4 порт:" << m_tcpPort;
+        connect(m_tcpServer, &QTcpServer::newConnection, this, &NetworkEngine::handleNewTcpConnection);
+    }
+}
+
+void NetworkEngine::handleNewTcpConnection()
+{
+    QTcpSocket *clientSocket = m_tcpServer->nextPendingConnection();
+    if (clientSocket) {
+        m_activeTunnel = clientSocket;
+        connect(m_activeTunnel, &QTcpSocket::readyRead, this, &NetworkEngine::handleTcpReadyRead);
+        connect(m_activeTunnel, &QTcpSocket::disconnected, m_activeTunnel, &QTcpSocket::deleteLater);
+    }
+}
+void NetworkEngine::handleTcpReadyRead()
+{
+    if (!m_activeTunnel) return;
+    QByteArray data = m_activeTunnel->readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isNull() && doc.isObject()) {
+        QJsonObject json = doc.object();
+        QString type = json["type"].toString();
+        QString peerName = json["sender"].toString();
+        if (type == "message") {
+            emit messageReceived(peerName, json["text"].toString());
+        } else if (type == "request_open_chat") {
+            emit requestOpenChat(peerName);
+        } else if (type == "call_start") {
+            m_currentCallPeer = peerName;
+            emit incomingCall(peerName);
+        } else if (type == "call_accept") {
+            m_inCall = true;
+            m_currentCallPeer = peerName;
+            if (m_audioEngine) m_audioEngine->startRecording();
+            emit callAccepted();
+        } else if (type == "call_end") {
+            m_inCall = false;
+            if (m_audioEngine) m_audioEngine->stop();
+            m_currentCallPeer = "";
+            emit callEnded();
+        }
+    }
+}
+void NetworkEngine::startChatSession(const QString &targetPeer)
+{
+    QJsonObject json;
+    json["type"] = "request_open_chat";
+    json["sender"] = m_username;
+    json["target_peer"] = targetPeer;
+
+    QJsonDocument doc(json);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
+
+// Шлём пакет через туннель или бродкаст
+#ifdef _WIN32
+    if (m_activeTunnel && m_activeTunnel->state() == QAbstractSocket::ConnectedState) {
+        m_activeTunnel->write(data);
+        m_activeTunnel->flush();
+    } else {
+        broadcastDatagram(json);
+    }
+#else
+    broadcastDatagram(json);
+#endif
+}
+

@@ -6,23 +6,30 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# АВТО-ИНТЕРНЕТ: Флаг жестко вшит в код сборщика, галочки больше не слетят!
+# Автоматическое добавление разрешения на ИНТЕРНЕТ для Android
 set(QT_ANDROID_INTERNET_PERMISSION ON CACHE BOOL "Auto internet for Android" FORCE)
 
-add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-fexec-charset=UTF-8>")
+# Правильный, безопасный синтаксис кодировок для MSVC и Clang
+if(MSVC)
+    add_compile_options(/utf-8)
+else()
+    add_compile_options(-fexec-charset=UTF-8)
+endif()
 
-# Подключаем сеть и мобильный звук
+# Находим компоненты Qt 6
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick Network Multimedia)
 
+# Создаем исполняемый файл
 qt_add_executable(appTeleLoc WIN32
     main.cpp
     networkengine.cpp networkengine.h
     audioengine.cpp audioengine.h
 )
 
+# QML-модуль
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0
@@ -30,8 +37,10 @@ qt_add_qml_module(appTeleLoc
         Main.qml
 )
 
+# Линковка библиотек
 target_link_libraries(appTeleLoc PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Network Qt6::Multimedia
 )
 
+# Включаем текущую директорию для поиска заголовочных файлов
 target_include_directories(appTeleLoc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
