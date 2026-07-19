@@ -9,6 +9,7 @@
 #include <QList>
 #include <QHash>
 #include <QSettings>
+#include <QFile>
 #include "audioengine.h"
 
 struct OfflineMessage {
@@ -28,12 +29,12 @@ public:
 
     // Методы управления, доступные из QML
     Q_INVOKABLE void start(const QString &username);
-    Q_INVOKABLE void sendMessage(const QString &text);
     // Добавьте эту строчку:
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE void sendFile(const QString &filePath);
     Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
     Q_INVOKABLE void stopAudioCall();
+    Q_INVOKABLE QStringList getPeerNames() const;
 
     // Новые методы для сохранения авторизации
     Q_INVOKABLE bool isRegistered() const;
@@ -41,6 +42,10 @@ public:
     Q_INVOKABLE void saveNameToFile(const QString &username);
     Q_INVOKABLE void resetRegistration();
     Q_INVOKABLE void startChatSession(const QString &targetPeer);
+    Q_INVOKABLE void saveDebugAudioPath(const QString &path);
+    Q_INVOKABLE QString getSavedDebugAudioPath() const;
+    Q_INVOKABLE void setPlayFileMode(bool enabled);
+    Q_INVOKABLE QStringList getAvailableWavFiles() const;
 
     QStringList peerList() const;
     // В секцию public:
@@ -85,7 +90,7 @@ private:
     QHash<QString, PeerInfo> m_discoveredPeers;
 
     AudioEngine *m_audioEngine = nullptr;
-    QString m_currentCallPeer;
+    QList<QString> m_activeCallPeers;
     bool m_inCall = false;
 
     void broadcastDatagram(const QJsonObject &json);
@@ -102,9 +107,15 @@ private:
     QTcpSocket *m_activeTunnel = nullptr;
     int m_micLevel = 0;
     int m_netLevel = 0;
+    bool m_playFileMode = false;
+    QFile m_audioFile;
+    QTimer *m_filePlayTimer = nullptr;
+    bool m_localLoopbackMode = true;
+
 private slots:
     void handleNewTcpConnection();
     void handleTcpReadyRead();
+    void streamAudioFileChunk();
 
 };
 
