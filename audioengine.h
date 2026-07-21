@@ -37,6 +37,8 @@ private:
     QIODevice *m_inputDevice = nullptr;
     QIODevice *m_outputDevice = nullptr;
     QAudioFormat m_format;
+    QByteArray m_playbackBuffer;
+
 };
 
 #endif // AUDIOENGINE_H

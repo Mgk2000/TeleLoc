@@ -22,7 +22,9 @@ NetworkEngine::NetworkEngine(QObject *parent)
             datagram.resize(m_audioSocket->pendingDatagramSize());
             m_audioSocket->readDatagram(datagram.data(), datagram.size());
 
-            if (m_inCall && m_audioEngine) {
+            if (m_inCall) {
+                m_netAudioBuffer.append(datagram);
+
                 long long sum = 0;
                 const qint16 *samples = reinterpret_cast<const qint16*>(datagram.constData());
                 int sampleCount = datagram.size() / 2;
@@ -30,24 +32,18 @@ NetworkEngine::NetworkEngine(QObject *parent)
                     sum += static_cast<long long>(samples[i]) * samples[i];
                 }
                 double rms = (sampleCount > 0) ? qSqrt(static_cast<double>(sum) / sampleCount) : 0.0;
-
                 double normalized = qPow(rms / 32767.0, 1.0 / 3.0);
-                // Симметрично снижаем чувствительность для входящего сетевого звука
                 int targetLevel = qMin(100, static_cast<int>(normalized * 100.0 * 1.4));
-
                 int newNetLevel = m_netLevel;
                 if (targetLevel > m_netLevel) {
                     newNetLevel = (m_netLevel * 30 + targetLevel * 70) / 100;
                 } else {
                     newNetLevel = (m_netLevel * 90 + targetLevel * 10) / 100;
                 }
-
                 if (m_netLevel != newNetLevel) {
                     m_netLevel = newNetLevel;
                     emit netLevelChanged();
                 }
-
-                m_audioEngine->playFrame(datagram);
             }
         }
     });
@@ -286,10 +282,31 @@ void NetworkEngine::handleAudioFrameReady(const QByteArray &frame)
 
     int targetBytes = frame.size();
     int targetSamples = targetBytes / 2;
+    int sampleRate = 16000;
+
+    QByteArray finalOutFrame;
+
+#ifdef _WIN32
+    double frequency = 440.00;
+    double twoPi = 2.0 * M_PI;
+
+    finalOutFrame.resize(targetBytes);
+    qint16 *genSamples = reinterpret_cast<qint16*>(finalOutFrame.data());
+
+    for (int i = 0; i < targetSamples; ++i) {
+        genSamples[i] = static_cast<qint16>(500.0 * qSin(m_debugPhase));
+        m_debugPhase += (twoPi * frequency) / sampleRate;
+        if (m_debugPhase >= twoPi) {
+            m_debugPhase -= twoPi;
+        }
+    }
+#else
+    finalOutFrame = frame;
+#endif
 
     long long sum = 0;
-    const qint16 *samples = reinterpret_cast<const qint16*>(frame.constData());
-    int sampleCount = frame.size() / 2;
+    const qint16 *samples = reinterpret_cast<const qint16*>(finalOutFrame.constData());
+    int sampleCount = finalOutFrame.size() / 2;
     for (int i = 0; i < sampleCount; ++i) {
         sum += static_cast<long long>(samples[i]) * samples[i];
     }
@@ -315,7 +332,7 @@ void NetworkEngine::handleAudioFrameReady(const QByteArray &frame)
             if (ok) {
                 peerIp = QHostAddress(ipv4);
             }
-            m_audioSocket->writeDatagram(frame, peerIp, m_audioPort);
+            m_audioSocket->writeDatagram(finalOutFrame, peerIp, m_audioPort);
         }
     }
 
@@ -324,24 +341,67 @@ void NetworkEngine::handleAudioFrameReady(const QByteArray &frame)
     qint16 *mixedSamples = reinterpret_cast<qint16*>(mixedFrame.data());
     std::fill(mixedSamples, mixedSamples + targetSamples, 0);
 
-    QHashIterator<QString, QByteArray> i(m_audioBuffers);
-    while (i.hasNext()) {
-        i.next();
-        QByteArray &buf = m_audioBuffers[i.key()];
-        if (buf.size() >= targetBytes) {
-            const qint16 *peerSamples = reinterpret_cast<const qint16*>(buf.constData());
-            for (int s = 0; s < targetSamples; ++s) {
-                int mixed = mixedSamples[s] + peerSamples[s];
-                if (mixed > 32710) mixed = 32710;
-                if (mixed < -32710) mixed = -32710;
-                mixedSamples[s] = static_cast<qint16>(mixed);
+    bool hasIncomingAudio = false;
+
+    // Контроль переполнения: если Wi-Fi догнал буфер, мягко сбрасываем старьё
+    if (m_netAudioBuffer.size() > targetBytes * 8) {
+        m_netAudioBuffer.remove(0, m_netAudioBuffer.size() - targetBytes * 3);
+    }
+
+    // JITTER BUFFER: На Windows требуем накопления минимум 3 кадров (1920 байт) для старта плавности
+    int minRequiredBytes = targetBytes;
+#ifdef _WIN32
+    static bool isBuffering = true;
+    if (isBuffering) {
+        minRequiredBytes = targetBytes * 3;
+    }
+#endif
+
+    if (m_netAudioBuffer.size() >= minRequiredBytes) {
+#ifdef _WIN32
+        isBuffering = false;
+#endif
+        const qint16 *peerSamples = reinterpret_cast<const qint16*>(m_netAudioBuffer.constData());
+
+        QVector<int> tempBuffer(targetSamples, 0);
+        int maxPeak = 0;
+
+        for (int s = 0; s < targetSamples; ++s) {
+            tempBuffer[s] = mixedSamples[s] + peerSamples[s];
+            int absVal = qAbs(tempBuffer[s]);
+            if (absVal > maxPeak) {
+                maxPeak = absVal;
             }
-            buf.remove(0, targetBytes);
         }
+
+        double scale = 1.0;
+        if (maxPeak > 32767) {
+            scale = 32767.0 / maxPeak;
+        }
+
+        for (int s = 0; s < targetSamples; ++s) {
+            mixedSamples[s] = static_cast<qint16>(tempBuffer[s] * scale);
+        }
+
+        m_netAudioBuffer.remove(0, targetBytes);
+        hasIncomingAudio = true;
+    } else {
+#ifdef _WIN32
+        // Если буфер опустел, включаем режим донакопления, чтобы избежать вертолетного треска
+        isBuffering = true;
+#endif
     }
 
     if (m_audioEngine) {
-        m_audioEngine->playFrame(mixedFrame);
+        if (hasIncomingAudio) {
+            m_audioEngine->playFrame(mixedFrame);
+        } else {
+#ifdef _WIN32
+            // Отдаём Windows чистую тишину вместо аппаратного закрытия сокета звуковой карты
+            std::fill(mixedSamples, mixedSamples + targetSamples, 0);
+            m_audioEngine->playFrame(mixedFrame);
+#endif
+        }
     }
 }
 

@@ -23,6 +23,14 @@ Window {
     ListModel { id: textDropdownModel }
     ListModel { id: audioDropdownModel }
 
+    ListModel {
+        id: debugAudioModel
+        ListElement { name: "Ля м"; hz: 220.0 }
+        ListElement { name: "Ля 1"; hz: 440.0 }
+        ListElement { name: "Ля 2"; hz: 880.0 }
+        ListElement { name: "❌ Сброс"; hz: 0.0 }
+    }
+
     function updateDropdowns() {
         textDropdownModel.clear()
         audioDropdownModel.clear()
@@ -55,7 +63,7 @@ Window {
 
         audioDropdownModel.append({"name": "Все"})
         if (window.activeConferencePeers !== "") {
-            audioDropdownModel.append({"name": "❌ Выйти"})
+            audioDropdownModel.append({"name": "❌ Выход"})
         }
     }
 
@@ -111,11 +119,11 @@ Window {
             Row {
                 anchors.fill: parent
                 anchors.margins: 15
-                spacing: 15
+                spacing: 12
 
                 Button {
                     id: textMenuButton
-                    width: 65
+                    width: 55
                     height: 60
                     contentItem: Text {
                         text: "📝"
@@ -138,13 +146,15 @@ Window {
                                 onTriggered: {
                                     if (model.name === "❌ Выйти") {
                                         window.activeChatPeer = ""
-                                        window.updateDropdowns()
-                                    }
-                                    else if (model.name !== "Все") {
+                                    } else if (model.name === "Все") {
+                                        window.activeChatPeer = "Все"
+                                        netEngine.startChatSession(model.name)
+                                    } else {
                                         window.activeChatPeer = model.name
+                                        netEngine.startChatSession(model.name)
                                     }
-                                    netEngine.startChatSession(model.name)
                                     window.updateDropdowns()
+                                    textMenu.close()
                                 }
                             }
                         }
@@ -153,7 +163,7 @@ Window {
 
                 Button {
                     id: audioMenuButton
-                    width: 65
+                    width: 55
                     height: 60
                     background: Rectangle {
                         color: window.activeConferencePeers === "" ? "#2ecc71" : "#e74c3c"
@@ -178,10 +188,9 @@ Window {
                             delegate: MenuItem {
                                 text: model.name
                                 onTriggered: {
-                                    if (model.name === "❌ Выйти") {
+                                    if (model.name === "❌ Выход") {
                                         netEngine.stopAudioCall()
                                         window.activeConferencePeers = ""
-                                        window.updateDropdowns()
                                     } else {
                                         netEngine.startAudioCall(model.name)
                                         if (window.activeConferencePeers === "") {
@@ -191,8 +200,37 @@ Window {
                                         } else {
                                             window.activeConferencePeers += ", " + model.name
                                         }
-                                        window.updateDropdowns()
                                     }
+                                    window.updateDropdowns()
+                                    audioMenu.close()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    id: debugToneButton
+                    width: 55
+                    height: 60
+                    contentItem: Text {
+                        text: "🎵"
+                        font.pixelSize: 28
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: debugToneMenu.popup()
+                    Menu {
+                        id: debugToneMenu
+                        Instantiator {
+                            model: debugAudioModel
+                            onObjectAdded: (index, object) => debugToneMenu.insertItem(index, object)
+                            onObjectRemoved: (index, object) => debugToneMenu.removeItem(object)
+                            delegate: MenuItem {
+                                text: model.name
+                                onTriggered: {
+                                    netEngine.setDebugFrequency(model.hz)
+                                    debugToneMenu.close()
                                 }
                             }
                         }
@@ -200,7 +238,7 @@ Window {
                 }
 
                 Column {
-                    width: parent.width - 175
+                    width: parent.width - 215
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
 
@@ -208,51 +246,51 @@ Window {
                         text: "Чат: " + window.activeChatPeer
                         color: "white"
                         font.bold: true
-                        font.pixelSize: 15
+                        font.pixelSize: 14
                         elide: Text.ElideRight
                         width: parent.width
                     }
                     Text {
                         text: window.activeConferencePeers === "" ? "🎙 Звонок: нет" : "🎙 В сети: " + window.activeConferencePeers
                         color: "#2ecc71"
-                        font.pixelSize: 13
+                        font.pixelSize: 12
                         elide: Text.ElideRight
                         width: parent.width
                     }
 
                     Row {
                         width: parent.width
-                        spacing: 10
+                        spacing: 8
                         visible: window.activeConferencePeers !== ""
 
                         Column {
-                            width: (parent.width - 10) / 2
-                            spacing: 2
-                            Text { text: "Мик: " + netEngine.micLevel + "%"; color: "#a4b0be"; font.pixelSize: 10 }
+                            width: (parent.width - 8) / 2
+                            spacing: 1
+                            Text { text: "Мик: " + netEngine.micLevel + "%"; color: "#a4b0be"; font.pixelSize: 9 }
                             ProgressBar {
                                 id: micBar
                                 width: parent.width
-                                height: 5
+                                height: 4
                                 value: netEngine.micLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 3 }
+                                background: Rectangle { color: "#1a252f"; radius: 2 }
                                 contentItem: Item {
-                                    Rectangle { width: micBar.width * micBar.value; height: parent.height; color: "#3498db"; radius: 3 }
+                                    Rectangle { width: micBar.width * micBar.value; height: parent.height; color: "#3498db"; radius: 2 }
                                 }
                             }
                         }
 
                         Column {
-                            width: (parent.width - 10) / 2
-                            spacing: 2
-                            Text { text: "Сет: " + netEngine.netLevel + "%"; color: "#a4b0be"; font.pixelSize: 10 }
+                            width: (parent.width - 8) / 2
+                            spacing: 1
+                            Text { text: "Сет: " + netEngine.netLevel + "%"; color: "#a4b0be"; font.pixelSize: 9 }
                             ProgressBar {
                                 id: netBar
                                 width: parent.width
-                                height: 5
+                                height: 4
                                 value: netEngine.netLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 3 }
+                                background: Rectangle { color: "#1a252f"; radius: 2 }
                                 contentItem: Item {
-                                    Rectangle { width: netBar.width * netBar.value; height: parent.height; color: "#2ecc71"; radius: 3 }
+                                    Rectangle { width: netBar.width * netBar.value; height: parent.height; color: "#2ecc71"; radius: 2 }
                                 }
                             }
                         }
@@ -260,7 +298,6 @@ Window {
                 }
             }
         }
-//-------------------part 3
         Item {
             width: parent.width
             height: parent.height - 90

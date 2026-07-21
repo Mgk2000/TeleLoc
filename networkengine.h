@@ -78,7 +78,8 @@ private:
     QHash<QString, PeerInfo> m_discoveredPeers;
     QStringList m_activeCallPeers;
     QList<double> m_processedMessageIds;
-    QHash<QString, QByteArray> m_audioBuffers;    double m_debugPhase = 0.0;
+    QByteArray m_netAudioBuffer;
+    double m_debugPhase = 0.0;
     int m_debugNoteIdx = 0;
     int m_debugSamplesPlayed = 0;
 
