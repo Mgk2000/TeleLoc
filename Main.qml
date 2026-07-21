@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 
 Window {
     id: window
@@ -12,8 +11,6 @@ Window {
     property string activeChatPeer: ""
     property string activeConferencePeers: ""
     property string incomingCallFrom: ""
-    property string debugAudioPath: ""
-    property bool isPlayingFile: false
 
     ListModel { id: chatModel }
     ListModel {
@@ -25,24 +22,11 @@ Window {
     }
     ListModel { id: textDropdownModel }
     ListModel { id: audioDropdownModel }
-    ListModel { id: localWavFilesModel }
-
-    FileDialog {
-        id: audioFileDialog
-        title: "Выберите WAV файл"
-        currentFolder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
-        onAccepted: {
-            var path = String(audioFileDialog.selectedFile).replace("file:///", "")
-            window.debugAudioPath = path
-            netEngine.saveDebugAudioPath(path)
-        }
-    }
 
     function updateDropdowns() {
         textDropdownModel.clear()
         audioDropdownModel.clear()
-        textDropdownModel.append({"name": "Все"})
-        audioDropdownModel.append({"name": "Все"})
+
         var myName = "Пользователь"
         try {
             var saved = netEngine.getSavedName()
@@ -50,31 +34,28 @@ Window {
                 myName = saved
             }
         } catch(e) {}
+
         for (var i = 0; i < contactsModel.count; i++) {
             var contactName = contactsModel.get(i).name
             if (contactName === myName) continue
+
             if (contactName !== window.activeChatPeer) {
                 textDropdownModel.append({"name": contactName})
             }
+
             if (window.activeConferencePeers.indexOf(contactName) === -1) {
                 audioDropdownModel.append({"name": contactName})
             }
         }
-    }
 
-    function scanAndroidAudio() {
-        localWavFilesModel.clear()
-        var files = netEngine.getAvailableWavFiles()
+        textDropdownModel.append({"name": "Все"})
+        if (window.activeChatPeer !== "") {
+            textDropdownModel.append({"name": "❌ Выйти"})
+        }
 
-        // Если реальных файлов нет, шьем виртуальный список отладки!
-        if (files.length === 0) {
-            localWavFilesModel.append({"name": "Рингтон_Анфисы.wav"})
-            localWavFilesModel.append({"name": "Сигнал_Вызова_Ивана.wav"})
-            localWavFilesModel.append({"name": "Тестовая_Музыка.wav"})
-        } else {
-            for (var i = 0; i < files.length; i++) {
-                localWavFilesModel.append({"name": files[i]})
-            }
+        audioDropdownModel.append({"name": "Все"})
+        if (window.activeConferencePeers !== "") {
+            audioDropdownModel.append({"name": "❌ Выйти"})
         }
     }
 
@@ -82,6 +63,9 @@ Window {
         target: netEngine
         ignoreUnknownSignals: true
         function onMessageReceived(sender, text) {
+            if (sender !== netEngine.getSavedName()) {
+                window.activeChatPeer = sender
+            }
             chatModel.append({
                 "senderName": sender,
                 "messageText": text,
@@ -102,13 +86,11 @@ Window {
         }
         function onCallEnded() {
             window.activeConferencePeers = ""
-            window.isPlayingFile = false
             window.updateDropdowns()
         }
     }
 
     Component.onCompleted: {
-        window.debugAudioPath = netEngine.getSavedDebugAudioPath()
         if (!netEngine.isRegistered()) {
             netEngine.saveNameToFile("Пользователь")
         }
@@ -122,22 +104,22 @@ Window {
         Rectangle {
             id: toolbar
             width: parent.width
-            height: 60
+            height: 90
             color: "#2c3e50"
             z: 10
 
             Row {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 10
+                anchors.margins: 15
+                spacing: 15
 
                 Button {
                     id: textMenuButton
-                    width: 36
-                    height: 40
+                    width: 65
+                    height: 60
                     contentItem: Text {
                         text: "📝"
-                        font.pixelSize: 18
+                        font.pixelSize: 28
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -154,7 +136,11 @@ Window {
                             delegate: MenuItem {
                                 text: model.name
                                 onTriggered: {
-                                    if (model.name !== "Все") {
+                                    if (model.name === "❌ Выйти") {
+                                        window.activeChatPeer = ""
+                                        window.updateDropdowns()
+                                    }
+                                    else if (model.name !== "Все") {
                                         window.activeChatPeer = model.name
                                     }
                                     netEngine.startChatSession(model.name)
@@ -167,15 +153,15 @@ Window {
 
                 Button {
                     id: audioMenuButton
-                    width: 36
-                    height: 40
+                    width: 65
+                    height: 60
                     background: Rectangle {
                         color: window.activeConferencePeers === "" ? "#2ecc71" : "#e74c3c"
-                        radius: 6
+                        radius: 8
                     }
                     contentItem: Text {
                         text: "📞"
-                        font.pixelSize: 18
+                        font.pixelSize: 28
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -192,164 +178,81 @@ Window {
                             delegate: MenuItem {
                                 text: model.name
                                 onTriggered: {
-                                    netEngine.startAudioCall(model.name)
-                                    if (window.activeConferencePeers === "") {
-                                        window.activeConferencePeers = model.name
-                                    } else if (model.name === "Все") {
-                                        window.activeConferencePeers = "Все"
+                                    if (model.name === "❌ Выйти") {
+                                        netEngine.stopAudioCall()
+                                        window.activeConferencePeers = ""
+                                        window.updateDropdowns()
                                     } else {
-                                        window.activeConferencePeers += ", " + model.name
+                                        netEngine.startAudioCall(model.name)
+                                        if (window.activeConferencePeers === "") {
+                                            window.activeConferencePeers = model.name
+                                        } else if (model.name === "Все") {
+                                            window.activeConferencePeers = "Все"
+                                        } else {
+                                            window.activeConferencePeers += ", " + model.name
+                                        }
+                                        window.updateDropdowns()
                                     }
-                                    window.updateDropdowns()
                                 }
                             }
                         }
-                    }
-                }
-                Button {
-                    id: selectFileButton
-                    width: 36
-                    height: 40
-                    background: Rectangle {
-                        color: "#34495e"
-                        radius: 6
-                        border.color: window.debugAudioPath !== "" ? "#2ecc71" : "transparent"
-                        border.width: 1
-                    }
-                    contentItem: Text {
-                        text: "🎵"
-                        font.pixelSize: 18
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        if (Qt.platform.os === "android") {
-                            window.scanAndroidAudio()
-                            androidFilesMenu.popup()
-                        } else {
-                            audioFileDialog.open()
-                        }
-                    }
-                    ToolTip.visible: hovered
-                    ToolTip.text: window.debugAudioPath === "" ? "Выбрать отладочный WAV" : "Выбран: " + window.debugAudioPath.split('/').pop()
-
-                    Menu {
-                        id: androidFilesMenu
-                        Instantiator {
-                            model: localWavFilesModel
-                            onObjectAdded: (index, object) => androidFilesMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => androidFilesMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: model.name
-                                onTriggered: {
-                                    var baseDir = netEngine.getAvailableWavFilesPath()
-                                    window.debugAudioPath = baseDir + "/" + model.name
-                                    netEngine.saveDebugAudioPath(window.debugAudioPath)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Button {
-                    id: playFileButton
-                    width: 36
-                    height: 40
-                    visible: window.activeConferencePeers !== "" && window.debugAudioPath !== ""
-                    background: Rectangle {
-                        color: window.isPlayingFile ? "#f39c12" : "#2c3e50"
-                        radius: 6
-                        border.color: "#f39c12"
-                        border.width: 1
-                    }
-                    contentItem: Text {
-                        text: window.isPlayingFile ? "⏸️" : "▶️"
-                        font.pixelSize: 14
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        window.isPlayingFile = !window.isPlayingFile
-                        netEngine.setPlayFileMode(window.isPlayingFile)
-                    }
-                }
-
-                Button {
-                    id: hangUpButton
-                    width: 36
-                    height: 40
-                    visible: window.activeConferencePeers !== ""
-                    background: Rectangle {
-                        color: "#d63031"
-                        radius: 6
-                    }
-                    contentItem: Text {
-                        text: "❌"
-                        font.pixelSize: 14
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        netEngine.stopAudioCall()
-                        window.activeConferencePeers = ""
-                        window.updateDropdowns()
                     }
                 }
 
                 Column {
-                    width: parent.width - 158 - (playFileButton.visible ? 46 : 0) - (hangUpButton.visible ? 46 : 0)
+                    width: parent.width - 175
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 2
+                    spacing: 4
 
                     Text {
                         text: "Чат: " + window.activeChatPeer
                         color: "white"
                         font.bold: true
-                        font.pixelSize: 13
+                        font.pixelSize: 15
                         elide: Text.ElideRight
                         width: parent.width
                     }
                     Text {
                         text: window.activeConferencePeers === "" ? "🎙 Звонок: нет" : "🎙 В сети: " + window.activeConferencePeers
                         color: "#2ecc71"
-                        font.pixelSize: 11
+                        font.pixelSize: 13
                         elide: Text.ElideRight
                         width: parent.width
                     }
 
                     Row {
                         width: parent.width
-                        spacing: 6
+                        spacing: 10
                         visible: window.activeConferencePeers !== ""
 
                         Column {
-                            width: (parent.width - 6) / 2
-                            spacing: 1
-                            Text { text: "Мик: " + netEngine.micLevel + "%"; color: "#a4b0be"; font.pixelSize: 8 }
+                            width: (parent.width - 10) / 2
+                            spacing: 2
+                            Text { text: "Мик: " + netEngine.micLevel + "%"; color: "#a4b0be"; font.pixelSize: 10 }
                             ProgressBar {
                                 id: micBar
                                 width: parent.width
-                                height: 4
+                                height: 5
                                 value: netEngine.micLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 2 }
+                                background: Rectangle { color: "#1a252f"; radius: 3 }
                                 contentItem: Item {
-                                    Rectangle { width: micBar.width * micBar.value; height: parent.height; color: "#3498db"; radius: 2 }
+                                    Rectangle { width: micBar.width * micBar.value; height: parent.height; color: "#3498db"; radius: 3 }
                                 }
                             }
                         }
 
                         Column {
-                            width: (parent.width - 6) / 2
-                            spacing: 1
-                            Text { text: "Сет: " + netEngine.netLevel + "%"; color: "#a4b0be"; font.pixelSize: 8 }
+                            width: (parent.width - 10) / 2
+                            spacing: 2
+                            Text { text: "Сет: " + netEngine.netLevel + "%"; color: "#a4b0be"; font.pixelSize: 10 }
                             ProgressBar {
                                 id: netBar
                                 width: parent.width
-                                height: 4
+                                height: 5
                                 value: netEngine.netLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 2 }
+                                background: Rectangle { color: "#1a252f"; radius: 3 }
                                 contentItem: Item {
-                                    Rectangle { width: netBar.width * netBar.value; height: parent.height; color: "#2ecc71"; radius: 2 }
+                                    Rectangle { width: netBar.width * netBar.value; height: parent.height; color: "#2ecc71"; radius: 3 }
                                 }
                             }
                         }
@@ -357,9 +260,10 @@ Window {
                 }
             }
         }
+//-------------------part 3
         Item {
             width: parent.width
-            height: parent.height - 60
+            height: parent.height - 90
 
             Column {
                 anchors.fill: parent
@@ -369,7 +273,7 @@ Window {
                 ScrollView {
                     id: chatScroll
                     width: parent.width
-                    height: parent.height - 60
+                    height: parent.height - 70
                     clip: true
 
                     ListView {
@@ -422,12 +326,31 @@ Window {
 
                 Row {
                     width: parent.width
-                    height: 40
+                    height: 50
                     spacing: 10
+                    visible: window.activeChatPeer !== ""
+
+                    Button {
+                        id: clearChatButton
+                        width: 50
+                        height: parent.height
+                        contentItem: Text {
+                            text: "🗑️"
+                            font.pixelSize: 22
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: "#7f8c8d"
+                            radius: 8
+                        }
+                        onClicked: chatModel.clear()
+                    }
 
                     TextField {
                         id: messageInput
-                        width: parent.width - 65
+                        width: parent.width - 130
+                        height: parent.height
                         placeholderText: "Введите сообщение..."
                         font.pixelSize: 16
                         onAccepted: okButton.clicked()
@@ -436,13 +359,13 @@ Window {
                     Button {
                         id: okButton
                         text: "▶"
-                        width: 55
+                        width: 60
                         height: parent.height
-                        font.pixelSize: 22
+                        font.pixelSize: 24
                         font.bold: true
                         background: Rectangle {
                             color: "#4caf50"
-                            radius: 6
+                            radius: 8
                         }
                         contentItem: Text {
                             text: okButton.text
@@ -475,7 +398,7 @@ Window {
                 }
                 Rectangle {
                     width: 280
-                    height: 160
+                    height: 180
                     color: "white"
                     radius: 12
                     anchors.centerIn: parent
@@ -494,22 +417,22 @@ Window {
                         Button {
                             text: "📞 Ответить"
                             width: parent.width
-                            height: 45
+                            height: 50
                             anchors.horizontalCenter: parent.horizontalCenter
                             background: Rectangle {
                                 color: "#2ecc71"
-                                radius: 6
+                                radius: 8
                             }
                             contentItem: Text {
                                 text: parent.text
                                 color: "white"
-                                font.pixelSize: 16
+                                font.pixelSize: 18
                                 font.bold: true
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             onClicked: {
-                                netEngine.startAudioCall(window.incomingCallFrom)
+                                netEngine.acceptAudioCall(window.incomingCallFrom)
                             }
                         }
                     }
