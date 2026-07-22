@@ -35,13 +35,7 @@ Window {
         textDropdownModel.clear()
         audioDropdownModel.clear()
 
-        var myName = "Пользователь"
-        try {
-            var saved = netEngine.getSavedName()
-            if (saved && saved !== "") {
-                myName = saved
-            }
-        } catch(e) {}
+        var myName = netEngine.username
 
         for (var i = 0; i < contactsModel.count; i++) {
             var contactName = contactsModel.get(i).name
@@ -69,13 +63,13 @@ Window {
         target: netEngine
         ignoreUnknownSignals: true
         function onMessageReceived(sender, text) {
-            if (sender !== netEngine.getSavedName()) {
+            if (sender !== netEngine.username) {
                 window.activeChatPeer = sender
             }
             chatModel.append({
                 "senderName": sender,
                 "messageText": text,
-                "isMe": (sender === netEngine.getSavedName())
+                "isMe": (sender === netEngine.username)
             })
         }
         function onIncomingCall(peer) {
@@ -84,7 +78,7 @@ Window {
             }
         }
         function onCallAccepted() {
-            window.activeConferencePeers = window.incomingCallFrom !== "" ? window.incomingCallFrom : netEngine.getSavedName()
+            window.activeConferencePeers = window.incomingCallFrom !== "" ? window.incomingCallFrom : netEngine.username
             window.incomingCallFrom = ""
             window.updateDropdowns()
         }
@@ -101,10 +95,10 @@ Window {
         netEngine.start(netEngine.getSavedName())
         window.updateDropdowns()
     }
-
     Column {
         anchors.fill: parent
         spacing: 0
+
         Rectangle {
             id: toolbar
             width: parent.width
@@ -117,6 +111,7 @@ Window {
                 anchors.margins: 15
                 spacing: 12
 
+                // Кнопка текстового чата
                 Button {
                     id: textMenuButton
                     width: 55
@@ -141,20 +136,21 @@ Window {
                                 text: model.name
                                 onTriggered: {
                                     var chosenName = model.name
-                                    textMenu.close() // Сначала закрываем!
-
+                                    textMenu.close()
                                     if (chosenName === "❌ Выйти") {
                                         window.activeChatPeer = ""
                                     } else {
                                         window.activeChatPeer = chosenName
                                         netEngine.startChatSession(chosenName)
                                     }
-                                    window.updateDropdowns() // Потом обновляем!
-                                }                            }
+                                    window.updateDropdowns()
+                                }
+                            }
                         }
                     }
                 }
 
+                // Кнопка аудио-звонка
                 Button {
                     id: audioMenuButton
                     width: 55
@@ -170,13 +166,11 @@ Window {
                         verticalAlignment: Text.AlignVCenter
                     }
                     onClicked: {
-                        if (window.activeConferencePeers === "") {
-                            window.updateDropdowns()
-                            audioMenu.popup()
-                        } else {
+                        window.updateDropdowns()
+                        if (window.activeConferencePeers !== "") {
                             netEngine.stopAudioCall()
-                            window.activeConferencePeers = ""
-                            window.updateDropdowns()
+                        } else {
+                            audioMenu.popup()
                         }
                     }
                     Menu {
@@ -189,104 +183,163 @@ Window {
                                 text: model.name
                                 onTriggered: {
                                     var chosenName = model.name
-                                    audioMenu.close() // Сначала закрываем!
-
+                                    audioMenu.close()
                                     if (chosenName === "❌ Выход") {
                                         netEngine.stopAudioCall()
-                                        window.activeConferencePeers = ""
                                     } else {
-                                        window.activeConferencePeers = chosenName
                                         netEngine.startAudioCall(chosenName)
                                     }
-                                    window.updateDropdowns() // Потом обновляем!
+                                    window.updateDropdowns()
                                 }
                             }
                         }
                     }
                 }
 
-                Button {
-                    id: debugToneButton
-                    width: 55
-                    height: 60
-                    contentItem: Text {
-                        text: "🎵"
-                        font.pixelSize: 28
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: debugToneMenu.popup()
-                    Menu {
-                        id: debugToneMenu
-                        Instantiator {
-                            model: debugAudioModel
-                            onObjectAdded: (index, object) => debugToneMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => debugToneMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: model.name
-                                onTriggered: {
-                                    netEngine.setDebugFrequency(model.hz)
-                                    debugToneMenu.close()
-                                }
-                            }
-                        }
-                    }
-                }
-
+                // Панель статуса и изменения настроек
                 Column {
-                    width: parent.width - 215
-                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 140
+                    height: 60
                     spacing: 4
+                    justifyContent: Column.AlignVCenter
+
+                    // Редактирование профиля (сохранение в INI при Enter)
+                    Row {
+                        spacing: 6
+                        Text { text: "Профиль:"; color: "#a4b0be"; font.pixelSize: 12 }
+                        TextInput {
+                            text: netEngine.username
+                            color: "white"
+                            font.pixelSize: 12
+                            font.bold: true
+                            selectByMouse: true
+                            onAccepted: {
+                                netEngine.setUsername(text)
+                                window.updateDropdowns()
+                                focus = false
+                            }
+                        }
+                    }
 
                     Text {
-                        text: "Чат: " + window.activeChatPeer
-                        color: "white"
-                        font.bold: true
-                        font.pixelSize: 14
-                        elide: Text.ElideRight
-                        width: parent.width
-                    }
-                    Text {
-                        text: window.activeConferencePeers === "" ? "🎙 Линия свободна" : "🎙 На связи: " + window.activeConferencePeers
-                        color: window.activeConferencePeers === "" ? "#2ecc71" : "#e74c3c"
+                        text: window.activeConferencePeers !== "" ? "🎙️ Линия: Активна" : "💤 Линия: Свободна"
+                        color: window.activeConferencePeers !== "" ? "#2ecc71" : "#a4b0be"
                         font.pixelSize: 12
-                        elide: Text.ElideRight
-                        width: parent.width
                     }
+
+                    // Индикатор громкости микрофона
+                    ProgressBar {
+                        width: parent.width
+                        height: 4
+                        value: netEngine.micRms
+                        background: Rectangle { color: "#34495e"; radius: 2 }
+                        contentItem: Item {
+                            Rectangle {
+                                width: parent.parent.value * parent.parent.width
+                                height: parent.parent.height
+                                color: "#2ecc71"
+                                radius: 2
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Область чата
+        Rectangle {
+            width: parent.width
+            height: parent.height - toolbar.height
+            color: "#f5f6fa"
+
+            // Заглушка, если чат не выбран
+            Text {
+                text: "Выберите контакт для общения 📝"
+                anchors.centerIn: parent
+                color: "#7f8c8d"
+                font.pixelSize: 16
+                visible: window.activeChatPeer === ""
+            }
+
+            Column {
+                anchors.fill: parent
+                visible: window.activeChatPeer !== ""
+
+                // Список сообщений
+                ListView {
+                    id: chatListView
+                    width: parent.width
+                    height: parent.height - 60
+                    clip: true
+                    model: chatModel
+                    spacing: 8
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    delegate: Item {
+                        width: chatListView.width
+                        height: messageBg.height + 4
+
+                        Rectangle {
+                            id: messageBg
+                            width: Math.min(messageTextElement.implicitWidth + 24, parent.width * 0.7)
+                            height: messageTextElement.implicitHeight + 16
+                            radius: 12
+                            color: model.isMe ? "#2980b9" : "#ffffff"
+                            border.color: model.isMe ? "#2980b9" : "#dcdde1"
+                            anchors.right: model.isMe ? parent.right : undefined
+                            anchors.left: model.isMe ? undefined : parent.left
+                            anchors.margins: 8
+
+                            Text {
+                                id: messageTextElement
+                                text: (model.isMe ? "" : model.senderName + ":\n") + model.messageText
+                                color: model.isMe ? "white" : "#2c3e50"
+                                font.pixelSize: 14
+                                wrapMode: Text.Wrap
+                                anchors.fill: parent
+                                anchors.margins: 8
+                            }
+                        }
+                    }
+
+                    onCountChanged: {
+                        Qt.callLater(chatListView.positionViewAtEnd)
+                    }
+                }
+
+                // Поле ввода сообщений
+                Rectangle {
+                    width: parent.width
+                    height: 60
+                    color: "white"
+                    border.color: "#dcdde1"
 
                     Row {
-                        width: parent.width
-                        spacing: 8
-                        visible: window.activeConferencePeers !== ""
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 10
 
-                        Column {
-                            width: (parent.width - 8) / 2
-                            spacing: 1
-                            Text { text: "Мик: " + netEngine.micLevel + "%"; color: "#a4b0be"; font.pixelSize: 9 }
-                            ProgressBar {
-                                id: micBar
-                                width: parent.width
-                                height: 4
-                                value: netEngine.micLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 2 }
-                                contentItem: Item {
-                                    Rectangle { width: micBar.width * micBar.value; height: parent.height; color: "#3498db"; radius: 2 }
+                        TextField {
+                            id: messageField
+                            width: parent.width - 70
+                            height: parent.height
+                            placeholderText: "Напишите " + window.activeChatPeer + "..."
+                            font.pixelSize: 14
+                            onAccepted: {
+                                if (text.trim() !== "") {
+                                    netEngine.sendChatMessage(text)
+                                    text = ""
                                 }
                             }
                         }
 
-                        Column {
-                            width: (parent.width - 8) / 2
-                            spacing: 1
-                            Text { text: "Сет: " + netEngine.netLevel + "%"; color: "#a4b0be"; font.pixelSize: 9 }
-                            ProgressBar {
-                                id: netBar
-                                width: parent.width
-                                height: 4
-                                value: netEngine.netLevel / 100.0
-                                background: Rectangle { color: "#1a252f"; radius: 2 }
-                                contentItem: Item {
-                                    Rectangle { width: netBar.width * netBar.value; height: parent.height; color: "#2ecc71"; radius: 2 }
+                        Button {
+                            width: 60
+                            height: parent.height
+                            text: "Отпр."
+                            onClicked: {
+                                if (messageField.text.trim() !== "") {
+                                    netEngine.sendChatMessage(messageField.text)
+                                    messageField.text = ""
                                 }
                             }
                         }
@@ -294,198 +347,97 @@ Window {
                 }
             }
         }
-        Item {
-            width: parent.width
-            height: parent.height - 90
+    }
 
-            Column {
-                anchors.fill: parent
-                anchors.margins: 15
-                spacing: 10
+    // Всплывающее полноэкранное окно для Входящего Вызова
+    Rectangle {
+        id: incomingCallOverlay
+        anchors.fill: parent
+        color: "#e61a252f" // Полупрозрачный темный фон
+        visible: window.incomingCallFrom !== ""
+        z: 100
 
-                ScrollView {
-                    id: chatScroll
-                    width: parent.width
-                    height: parent.height - 70
-                    clip: true
+        // Перехват кликов по фону для отклонения вызова
+        MouseArea {
+            anchors.fill: parent
+            onClicked: {
+                netEngine.stopAudioCall()
+                window.incomingCallFrom = ""
+            }
+        }
 
-                    ListView {
-                        id: chatListView
-                        model: chatModel
-                        width: chatScroll.width
-                        spacing: 8
-                        onCountChanged: chatListView.positionViewAtEnd()
+        Column {
+            anchors.centerIn: parent
+            spacing: 30
+            horizontalAlignment: Text.AlignHCenter
 
-                        delegate: Item {
-                            width: chatListView.width
-                            height: messageBubble.height + 4
+            Text {
+                text: "📞 Входящий звонок"
+                color: "white"
+                font.pixelSize: 26
+                font.bold: true
+            }
 
-                            Rectangle {
-                                id: messageBubble
-                                color: model.isMe ? "#e8f5e9" : "#ffffff"
-                                border.color: model.isMe ? "#c8e6c9" : "#e0e0e0"
-                                border.width: 1
-                                radius: 8
-                                width: parent.width - 20
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                height: msgColumn.height + 12
+            // Аватарка вызывающего абонента
+            Rectangle {
+                width: 100
+                height: 100
+                radius: 50
+                color: "#e74c3c"
+                anchors.horizontalCenter: parent.horizontalCenter
 
-                                Column {
-                                    id: msgColumn
-                                    x: 10
-                                    y: 6
-                                    width: parent.width - 20
-                                    spacing: 4
-
-                                    Text {
-                                        text: model.isMe ? "Вы:" : model.senderName + ":"
-                                        font.bold: true
-                                        font.pixelSize: 14
-                                        color: {
-                                            if (model.isMe) return "#2e7d32" // Для себя всегда оставляем зеленый
-
-                                            // Красивая палитра из 8 сочных, контрастных цветов
-                                            var palette = [
-                                                "#1e3799", "#b71540", "#6a1b9a", "#079992",
-                                                "#e67e22", "#2c3e50", "#d35400", "#16a085"
-                                            ]
-
-                                            // Хэшируем имя: складываем числовые коды всех букв в имени
-                                            var nameStr = model.senderName ? model.senderName : ""
-                                            var hash = 0
-                                            for (var i = 0; i < nameStr.length; i++) {
-                                                hash = nameStr.charCodeAt(i) + ((hash << 5) - hash)
-                                            }
-
-                                            // Берем остаток от деления на размер палитры, чтобы индекс не вылетел за границы
-                                            var index = Math.abs(hash) % palette.length
-                                            return palette[index]
-                                        }
-                                    }
-                                    Text {
-                                        text: model.messageText
-                                        color: "black"
-                                        font.pixelSize: 15
-                                        wrapMode: Text.Wrap
-                                        width: parent.width
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Row {
-                    width: parent.width
-                    height: 50
-                    spacing: 10
-                    visible: window.activeChatPeer !== ""
-
-                    Button {
-                        id: clearChatButton
-                        width: 50
-                        height: parent.height
-                        contentItem: Text {
-                            text: "🗑️"
-                            font.pixelSize: 22
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: "#7f8c8d"
-                            radius: 8
-                        }
-                        onClicked: chatModel.clear()
-                    }
-
-                    TextField {
-                        id: messageInput
-                        width: parent.width - 130
-                        height: parent.height
-                        placeholderText: "Введите сообщение..."
-                        font.pixelSize: 16
-                        onAccepted: okButton.clicked()
-                    }
-
-                    Button {
-                        id: okButton
-                        text: "▶"
-                        width: 60
-                        height: parent.height
-                        font.pixelSize: 24
-                        font.bold: true
-                        background: Rectangle {
-                            color: "#4caf50"
-                            radius: 8
-                        }
-                        contentItem: Text {
-                            text: okButton.text
-                            font: okButton.font
-                            color: "white"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        onClicked: {
-                            if (messageInput.text.trim() !== "") {
-                                netEngine.sendMessage(window.activeChatPeer, messageInput.text.trim())
-                                messageInput.text = ""
-                            }
-                        }
-                    }
+                Text {
+                    text: window.incomingCallFrom.charAt(0).toUpperCase()
+                    color: "white"
+                    font.pixelSize: 42
+                    font.bold: true
+                    anchors.centerIn: parent
                 }
             }
 
-            Rectangle {
-                anchors.fill: parent
-                color: "#aa000000"
-                visible: window.incomingCallFrom !== ""
-                z: 20
-                MouseArea {
-                    anchors.fill: parent
+            Text {
+                text: window.incomingCallFrom
+                color: "white"
+                font.pixelSize: 22
+                font.bold: true
+            }
+
+            Row {
+                spacing: 40
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                // Кнопка Принять звонок
+                Button {
+                    width: 70
+                    height: 70
+                    background: Rectangle { color: "#2ecc71"; radius: 35 }
+                    contentItem: Text {
+                        text: "✓"
+                        color: "white"
+                        font.pixelSize: 32
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: {
+                        netEngine.acceptAudioCall()
+                    }
+                }
+
+                // Кнопка Сбросить звонок
+                Button {
+                    width: 70
+                    height: 70
+                    background: Rectangle { color: "#e74c3c"; radius: 35 }
+                    contentItem: Text {
+                        text: "✕"
+                        color: "white"
+                        font.pixelSize: 32
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                     onClicked: {
                         netEngine.stopAudioCall()
                         window.incomingCallFrom = ""
-                    }
-                }
-                Rectangle {
-                    width: 280
-                    height: 180
-                    color: "white"
-                    radius: 12
-                    anchors.centerIn: parent
-                    MouseArea { anchors.fill: parent }
-                    Column {
-                        anchors.centerIn: parent
-                        spacing: 20
-                        width: parent.width * 0.85
-                        Text {
-                            text: "Входящий вызов от:\n" + window.incomingCallFrom
-                            font.pixelSize: 18
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            width: parent.width
-                        }
-                        Button {
-                            text: "📞 Ответить"
-                            width: parent.width
-                            height: 50
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            background: Rectangle {
-                                color: "#2ecc71"
-                                radius: 8
-                            }
-                            contentItem: Text {
-                                text: parent.text
-                                color: "white"
-                                font.pixelSize: 18
-                                font.bold: true
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            onClicked: {
-                                netEngine.acceptAudioCall(window.incomingCallFrom)
-                            }
-                        }
                     }
                 }
             }

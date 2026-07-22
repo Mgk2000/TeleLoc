@@ -1,92 +1,84 @@
 #ifndef NETWORKENGINE_H
 #define NETWORKENGINE_H
 
+#pragma once
 #include <QObject>
 #include <QUdpSocket>
-#include <QTimer>
-#include <QDateTime>
 #include <QHostAddress>
-#include <QList>
-#include <QHash>
-#include <QSettings>
+#include <QTimer>
 #include <QJsonObject>
-#include <QVector>
+#include <QJsonDocument>
+#include <QSettings>
+#include <QSoundEffect>
 #include "audioengine.h"
 
 class NetworkEngine : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QStringList peerList READ peerList NOTIFY peerListChanged)
-    Q_PROPERTY(int micLevel READ micLevel NOTIFY micLevelChanged)
-    Q_PROPERTY(int netLevel READ netLevel NOTIFY netLevelChanged)
+
+    // Свойство для связывания имени пользователя с QML интерфейсом
+    Q_PROPERTY(QString username READ username WRITE setUsername NOTIFY usernameChanged)
+    Q_PROPERTY(double micRms READ micRms NOTIFY micRmsChanged)
 
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
     ~NetworkEngine();
 
-    Q_INVOKABLE void start(const QString &username);
-    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
-    Q_INVOKABLE void startChatSession(const QString &targetPeerName);
-    Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
-    Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName);
-    Q_INVOKABLE void stopAudioCall();
-    Q_INVOKABLE void setDebugFrequency(double hz);
-
+    // Системные методы управления сессией
+    Q_INVOKABLE void start(const QString &name);
     Q_INVOKABLE void saveNameToFile(const QString &name);
     Q_INVOKABLE QString getSavedName() const;
     Q_INVOKABLE bool isRegistered() const;
 
-    QStringList peerList() const;
-    int micLevel() const { return m_micLevel; }
-    int netLevel() const { return m_netLevel; }
+    // Геттер и сеттер для свойства username
+    QString username() const { return m_username; }
+    void setUsername(const QString &name);
+
+    // Работа с чатом и звонками
+    Q_INVOKABLE void startChatSession(const QString &targetPeer);
+    Q_INVOKABLE void sendChatMessage(const QString &text);
+    Q_INVOKABLE void startAudioCall(const QString &targetPeer);
+    Q_INVOKABLE void acceptAudioCall();
+    Q_INVOKABLE void stopAudioCall();
+
+    double micRms() const { return m_micRms; }
 
 signals:
+    void usernameChanged();
     void messageReceived(const QString &sender, const QString &text);
-    void peerListChanged();
-    void incomingCall(const QString &peerName);
+    void incomingCall(const QString &peer);
     void callAccepted();
     void callEnded();
-    void requestOpenChat(const QString &peerName);
-    void micLevelChanged();
-    void netLevelChanged();
+    void micRmsChanged();
 
 private slots:
     void readPendingDatagrams();
     void sendHeartbeat();
-    void handleAudioFrameReady(const QByteArray &frame);
+    void handleAudioInputReady(const QByteArray &data);
 
 private:
-    struct PeerInfo {
-        QHostAddress address;
-        QDateTime lastSeen;
-    };
+    void processJsonMessage(const QJsonObject &json);
+    void sendJsonMessage(const QJsonObject &json);
 
-    void broadcastDatagram(const QJsonObject &json);
-    void processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress);
-
+    // Сетевые ресурсы
     QUdpSocket *m_udpSocket = nullptr;
-    QUdpSocket *m_sendUdpSocket = nullptr;
-    QUdpSocket *m_audioSocket = nullptr;
-
-    int m_port = 45455;
-    int m_audioPort = 45456;
-
-    QString m_username;
-    bool m_inCall = false;
-
-    int m_micLevel = 0;
-    int m_netLevel = 0;
-
-    AudioEngine *m_audioEngine = nullptr;
+    quint16 m_port = 45455;
     QTimer *m_heartbeatTimer = nullptr;
 
-    QHash<QString, PeerInfo> m_discoveredPeers;
-    QStringList m_activeCallPeers;
-    QList<double> m_processedMessageIds;
-    QByteArray m_netAudioBuffer;
+    // Идентификация пользователя
+    QString m_username;
 
-    double m_debugFrequency = 0.0;
-    double m_debugPhase = 0.0;
+    // Состояние звонков и чата
+    QString m_currentActiveChatPeer;
     QString m_currentActiveCallPeer;
+    bool m_isAudioCallActive = false;
+
+    // Движок звука
+    AudioEngine m_audioEngine;
+    double m_micRms = 0.0;
+
+    // Плеер для зацикленного рингтона входящего вызова
+    QSoundEffect *m_ringtonePlayer = nullptr;
 };
+
 #endif // NETWORKENGINE_H

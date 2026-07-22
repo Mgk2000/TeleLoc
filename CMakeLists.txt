@@ -35,6 +35,9 @@ qt_add_qml_module(appTeleLoc
     VERSION 1.0
     QML_FILES
         Main.qml
+    RESOURCES
+       ring1.wav
+       ring2.wav
 )
 
 # Линковка библиотек
