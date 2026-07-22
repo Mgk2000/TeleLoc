@@ -9,6 +9,8 @@
 #include <QList>
 #include <QHash>
 #include <QSettings>
+#include <QJsonObject>
+#include <QVector>
 #include "audioengine.h"
 
 class NetworkEngine : public QObject
@@ -17,6 +19,7 @@ class NetworkEngine : public QObject
     Q_PROPERTY(QStringList peerList READ peerList NOTIFY peerListChanged)
     Q_PROPERTY(int micLevel READ micLevel NOTIFY micLevelChanged)
     Q_PROPERTY(int netLevel READ netLevel NOTIFY netLevelChanged)
+
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
     ~NetworkEngine();
@@ -25,20 +28,17 @@ public:
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE void startChatSession(const QString &targetPeerName);
     Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
+    Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName);
     Q_INVOKABLE void stopAudioCall();
+    Q_INVOKABLE void setDebugFrequency(double hz);
 
     Q_INVOKABLE void saveNameToFile(const QString &name);
     Q_INVOKABLE QString getSavedName() const;
     Q_INVOKABLE bool isRegistered() const;
-    Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName);
 
     QStringList peerList() const;
     int micLevel() const { return m_micLevel; }
     int netLevel() const { return m_netLevel; }
-    struct PeerInfo {
-        QHostAddress address;
-        QDateTime lastSeen;
-    };
 
 signals:
     void messageReceived(const QString &sender, const QString &text);
@@ -56,6 +56,11 @@ private slots:
     void handleAudioFrameReady(const QByteArray &frame);
 
 private:
+    struct PeerInfo {
+        QHostAddress address;
+        QDateTime lastSeen;
+    };
+
     void broadcastDatagram(const QJsonObject &json);
     void processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress);
 
@@ -79,10 +84,9 @@ private:
     QStringList m_activeCallPeers;
     QList<double> m_processedMessageIds;
     QByteArray m_netAudioBuffer;
+
+    double m_debugFrequency = 0.0;
     double m_debugPhase = 0.0;
-    int m_debugNoteIdx = 0;
-    int m_debugSamplesPlayed = 0;
-
+    QString m_currentActiveCallPeer;
 };
-
 #endif // NETWORKENGINE_H

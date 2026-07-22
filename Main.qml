@@ -56,12 +56,10 @@ Window {
             }
         }
 
-        textDropdownModel.append({"name": "Все"})
         if (window.activeChatPeer !== "") {
             textDropdownModel.append({"name": "❌ Выйти"})
         }
 
-        audioDropdownModel.append({"name": "Все"})
         if (window.activeConferencePeers !== "") {
             audioDropdownModel.append({"name": "❌ Выход"})
         }
@@ -81,14 +79,12 @@ Window {
             })
         }
         function onIncomingCall(peer) {
-            window.incomingCallFrom = peer
+            if (window.activeConferencePeers === "") {
+                window.incomingCallFrom = peer
+            }
         }
         function onCallAccepted() {
-            if (window.activeConferencePeers === "") {
-                window.activeConferencePeers = window.incomingCallFrom
-            } else {
-                window.activeConferencePeers += ", " + window.incomingCallFrom
-            }
+            window.activeConferencePeers = window.incomingCallFrom !== "" ? window.incomingCallFrom : netEngine.getSavedName()
             window.incomingCallFrom = ""
             window.updateDropdowns()
         }
@@ -144,19 +140,17 @@ Window {
                             delegate: MenuItem {
                                 text: model.name
                                 onTriggered: {
-                                    if (model.name === "❌ Выйти") {
+                                    var chosenName = model.name
+                                    textMenu.close() // Сначала закрываем!
+
+                                    if (chosenName === "❌ Выйти") {
                                         window.activeChatPeer = ""
-                                    } else if (model.name === "Все") {
-                                        window.activeChatPeer = "Все"
-                                        netEngine.startChatSession(model.name)
                                     } else {
-                                        window.activeChatPeer = model.name
-                                        netEngine.startChatSession(model.name)
+                                        window.activeChatPeer = chosenName
+                                        netEngine.startChatSession(chosenName)
                                     }
-                                    window.updateDropdowns()
-                                    textMenu.close()
-                                }
-                            }
+                                    window.updateDropdowns() // Потом обновляем!
+                                }                            }
                         }
                     }
                 }
@@ -166,7 +160,7 @@ Window {
                     width: 55
                     height: 60
                     background: Rectangle {
-                        color: window.activeConferencePeers === "" ? "#2ecc71" : "#e74c3c"
+                        color: (window.activeConferencePeers !== "" && window.incomingCallFrom === "") ? "#e74c3c" : "#2ecc71"
                         radius: 8
                     }
                     contentItem: Text {
@@ -176,8 +170,14 @@ Window {
                         verticalAlignment: Text.AlignVCenter
                     }
                     onClicked: {
-                        window.updateDropdowns()
-                        audioMenu.popup()
+                        if (window.activeConferencePeers === "") {
+                            window.updateDropdowns()
+                            audioMenu.popup()
+                        } else {
+                            netEngine.stopAudioCall()
+                            window.activeConferencePeers = ""
+                            window.updateDropdowns()
+                        }
                     }
                     Menu {
                         id: audioMenu
@@ -188,21 +188,17 @@ Window {
                             delegate: MenuItem {
                                 text: model.name
                                 onTriggered: {
-                                    if (model.name === "❌ Выход") {
+                                    var chosenName = model.name
+                                    audioMenu.close() // Сначала закрываем!
+
+                                    if (chosenName === "❌ Выход") {
                                         netEngine.stopAudioCall()
                                         window.activeConferencePeers = ""
                                     } else {
-                                        netEngine.startAudioCall(model.name)
-                                        if (window.activeConferencePeers === "") {
-                                            window.activeConferencePeers = model.name
-                                        } else if (model.name === "Все") {
-                                            window.activeConferencePeers = "Все"
-                                        } else {
-                                            window.activeConferencePeers += ", " + model.name
-                                        }
+                                        window.activeConferencePeers = chosenName
+                                        netEngine.startAudioCall(chosenName)
                                     }
-                                    window.updateDropdowns()
-                                    audioMenu.close()
+                                    window.updateDropdowns() // Потом обновляем!
                                 }
                             }
                         }
@@ -251,8 +247,8 @@ Window {
                         width: parent.width
                     }
                     Text {
-                        text: window.activeConferencePeers === "" ? "🎙 Звонок: нет" : "🎙 В сети: " + window.activeConferencePeers
-                        color: "#2ecc71"
+                        text: window.activeConferencePeers === "" ? "🎙 Линия свободна" : "🎙 На связи: " + window.activeConferencePeers
+                        color: window.activeConferencePeers === "" ? "#2ecc71" : "#e74c3c"
                         font.pixelSize: 12
                         elide: Text.ElideRight
                         width: parent.width
@@ -345,9 +341,27 @@ Window {
                                         text: model.isMe ? "Вы:" : model.senderName + ":"
                                         font.bold: true
                                         font.pixelSize: 14
-                                        color: model.isMe ? "#2e7d32" : "#6a1b9a"
-                                    }
+                                        color: {
+                                            if (model.isMe) return "#2e7d32" // Для себя всегда оставляем зеленый
 
+                                            // Красивая палитра из 8 сочных, контрастных цветов
+                                            var palette = [
+                                                "#1e3799", "#b71540", "#6a1b9a", "#079992",
+                                                "#e67e22", "#2c3e50", "#d35400", "#16a085"
+                                            ]
+
+                                            // Хэшируем имя: складываем числовые коды всех букв в имени
+                                            var nameStr = model.senderName ? model.senderName : ""
+                                            var hash = 0
+                                            for (var i = 0; i < nameStr.length; i++) {
+                                                hash = nameStr.charCodeAt(i) + ((hash << 5) - hash)
+                                            }
+
+                                            // Берем остаток от деления на размер палитры, чтобы индекс не вылетел за границы
+                                            var index = Math.abs(hash) % palette.length
+                                            return palette[index]
+                                        }
+                                    }
                                     Text {
                                         text: model.messageText
                                         color: "black"

@@ -1,16 +1,14 @@
 #ifndef AUDIOENGINE_H
 #define AUDIOENGINE_H
-#include <QTcpServer>
-#include <QTcpSocket>
+
 #include <QObject>
 #include <QByteArray>
-#include <QMediaCaptureSession>
-#include <QAudioInput>
-#include <QAudioSink>
 #include <QAudioSource>
-#include <QMediaDevices>
+#include <QAudioSink>
 #include <QAudioFormat>
-#include <QBuffer>
+#include <QMediaDevices>
+#include <QAudioDevice>
+#include <QIODevice>
 
 class AudioEngine : public QObject
 {
@@ -19,13 +17,11 @@ public:
     explicit AudioEngine(QObject *parent = nullptr);
     ~AudioEngine();
 
-    // Методы управления звуком, которые вызывает NetworkEngine
     void startRecording();
     void playFrame(const QByteArray &frame);
     void stop();
 
 signals:
-    // Сигнал, сообщающий сети, что готов новый кусочек голоса с микрофона
     void frameReady(const QByteArray &frame);
 
 private slots:
@@ -38,7 +34,6 @@ private:
     QIODevice *m_outputDevice = nullptr;
     QAudioFormat m_format;
     QByteArray m_playbackBuffer;
-
 };
 
 #endif // AUDIOENGINE_H
