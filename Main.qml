@@ -83,8 +83,8 @@ Window {
                 window.incomingCallFrom = peer
             }
         }
-        function onCallAccepted() {
-            window.activeConferencePeers = window.incomingCallFrom !== "" ? window.incomingCallFrom : netEngine.getSavedName()
+        function onCallAccepted(peerName) {
+            window.activeConferencePeers = peerName
             window.incomingCallFrom = ""
             window.updateDropdowns()
         }

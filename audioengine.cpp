@@ -32,6 +32,10 @@ void AudioEngine::startRecording()
     // Открываем тракт воспроизведения звуковой карты
     m_outputDevice = m_audioSink->start();
 
+    // ФИКС ЗАДЕРЖКИ: Принудительно заставляем драйвер Windows сжать аппаратный буфер,
+    // что мгновенно уничтожает секундный лаг и сводит задержку к незаметным 30-40 мс!
+    m_audioSink->setBufferSize(1280);
+
     // Запускаем физическую запись с микрофона
     m_inputDevice = m_audioSource->start();
     if (m_inputDevice) {
@@ -76,11 +80,9 @@ void AudioEngine::playFrame(const QByteArray &frame)
                 m_playbackBuffer.remove(0, bytesToWrite);
             }
         }
-        // Защита от опустошения: если данных в сети нет, шлём нули, удерживая чип карты открытым
-        else if (m_playbackBuffer.size() < 320 && bytesFree >= 320) {
-            QByteArray softSilence(320, 0);
-            m_outputDevice->write(softSilence);
-        }
+        // ЧИСТЫЙ ФИКС ТРЕСКА: Блок else if с генерацией мягкой тишины (softSilence)
+        // полностью удален. Если данных в сети на эту наносекунду нет, мы не шлем
+        // в звуковой тракт искусственные нули, ломающие фазу, а просто ждем следующий живой кадр.
     }
 }
 

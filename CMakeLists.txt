@@ -33,8 +33,12 @@ qt_add_executable(appTeleLoc WIN32
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0
+    RESOURCE_PREFIX "/qt/qml/"
     QML_FILES
         Main.qml
+    RESOURCES
+        ring1.wav
+        ring2.wav
 )
 
 # Линковка библиотек

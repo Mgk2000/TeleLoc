@@ -7,6 +7,9 @@
 #include <QtMath>
 #include <QDebug>
 
+#include <QMediaDevices>
+#include <QAudioDevice>
+
 NetworkEngine::NetworkEngine(QObject *parent)
     : QObject(parent)
 {
@@ -54,6 +57,21 @@ NetworkEngine::NetworkEngine(QObject *parent)
             }
         }
     });
+
+    QAudioDevice defaultOutput = QMediaDevices::defaultAudioOutput();
+
+    m_ringtone = new QSoundEffect(this);
+    m_ringtone->setAudioDevice(defaultOutput); // <-- ЖЕСТКО НАПРАВЛЯЕМ ЗВУК ВСЛЕД ЗА ЮТУБОМ
+    m_ringtone->setSource(QUrl::fromLocalFile(QStringLiteral("D:/Projects/TeleLoc/ring1.wav")));
+    m_ringtone->setLoopCount(QSoundEffect::Infinite);
+    m_ringtone->setVolume(0.8f);
+
+    m_msgSound = new QSoundEffect(this);
+    m_msgSound->setAudioDevice(defaultOutput); // <-- СЮДА ТОЖЕ
+    m_msgSound->setSource(QUrl::fromLocalFile(QStringLiteral("D:/Projects/TeleLoc/ring2.wav")));
+    m_msgSound->setLoopCount(1);
+    m_msgSound->setVolume(0.7f);
+
     m_audioEngine = new AudioEngine(this);
     connect(m_audioEngine, &AudioEngine::frameReady, this, [this](const QByteArray &frame) {
         handleAudioFrameReady(frame);
@@ -132,7 +150,7 @@ void NetworkEngine::startChatSession(const QString &targetPeerName)
 
 void NetworkEngine::startAudioCall(const QString &targetPeerName)
 {
-    if (targetPeerName == "Все") return; // Запрещаем масс-звонки
+    if (targetPeerName == "Все" || targetPeerName.isEmpty()) return;
 
     m_currentActiveCallPeer = targetPeerName;
 
@@ -142,14 +160,31 @@ void NetworkEngine::startAudioCall(const QString &targetPeerName)
     json["target_peer"] = targetPeerName;
     broadcastDatagram(json);
 
-    m_inCall = true;
-    if (m_audioEngine) {
-        m_audioEngine->startRecording();
-    }
+    // Включаем рингтон (гудки вызова)
+    startRingtone();
+
+    // Мы еще не в режиме разговора, мы только ждем ответа!
+    m_inCall = false;
+
+    // ФИКС БАГА №2: Тайм-аут вызова. Если через 15 секунд абонент не ответит,
+    // принудительно сбрасываем звонок, чтобы гудки не шли бесконечно.
+    QTimer::singleShot(15000, this, [this, targetPeerName]() {
+        // Если мы все еще ждем ИМЕННО ЭТОГО абонента и разговор так и не начался (m_inCall == false)
+        if (!m_inCall && m_currentActiveCallPeer == targetPeerName) {
+            qDebug() << "Таймаут вызова:" << targetPeerName << "не отвечает.";
+            stopAudioCall();
+            emit messageReceived("Система", QString("Абонент %1 не отвечает").arg(targetPeerName));
+        }
+    });
 }
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName)
 {
+    if (targetPeerName.isEmpty()) return;
+
     m_currentActiveCallPeer = targetPeerName;
+
+    // ФИКС БАГА №1: Гасим рингтон намертво
+    stopRingtone();
 
     QJsonObject json;
     json["type"] = "call_accept";
@@ -157,15 +192,18 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName)
     json["target_peer"] = targetPeerName;
     broadcastDatagram(json);
 
+    // Переходим в режим разговора и включаем микрофон
     m_inCall = true;
     if (m_audioEngine) {
         m_audioEngine->startRecording();
     }
 
-    emit callAccepted();
-}
+emit callAccepted(targetPeerName);}
 void NetworkEngine::stopAudioCall()
 {
+    // Жестко и бескомпромиссно глушим рингтон
+    stopRingtone();
+
     if (!m_currentActiveCallPeer.isEmpty()) {
         QJsonObject json;
         json["type"] = "call_end";
@@ -176,9 +214,11 @@ void NetworkEngine::stopAudioCall()
 
     m_inCall = false;
     m_currentActiveCallPeer.clear();
+
     if (m_audioEngine) {
         m_audioEngine->stop();
     }
+
     emit callEnded();
 }
 
@@ -203,6 +243,8 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
 {
     QString type = json["type"].toString();
     QString senderName = json["sender"].toString();
+
+    // Жесткая защита от сетевого эха (самопроизвольного отлова собственных пакетов)
     if (senderName == m_username || senderName.isEmpty()) return;
 
     if (type == "heartbeat") {
@@ -229,6 +271,7 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
             m_processedMessageIds.removeFirst();
         }
 
+        playMessageSound();
         emit messageReceived(senderName, json["text"].toString());
     }
     else if (type == "request_open_chat") {
@@ -237,7 +280,6 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
     else if (type == "call_start") {
         QString target = json["target_peer"].toString();
         if (target == m_username) {
-            // Если мы уже с кем-то говорим, шлём в сеть пакет "Занято"
             if (!m_currentActiveCallPeer.isEmpty() && m_currentActiveCallPeer != senderName) {
                 QJsonObject busyJson;
                 busyJson["type"] = "call_busy";
@@ -248,38 +290,46 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
             }
 
             m_currentActiveCallPeer = senderName;
+            startRingtone();
             emit incomingCall(senderName);
         }
     }
     else if (type == "call_accept") {
         QString target = json["target_peer"].toString();
         if (target == m_username) {
+            stopRingtone(); // Глушим исходящие гудки, нам ответили!
+
             m_inCall = true;
             m_currentActiveCallPeer = senderName;
-            if (m_audioEngine) m_audioEngine->startRecording();
-            emit callAccepted();
+
+            // Включаем голосовой тракт СТРОГО в момент коннекта
+            if (m_audioEngine) {
+                m_audioEngine->startRecording();
+            }
+            emit callAccepted(senderName);
         }
     }
     else if (type == "call_busy") {
         QString target = json["target_peer"].toString();
         if (target == m_username) {
-            // Если нам ответили "Занято", сбрасываем свой вызов
             m_inCall = false;
             m_currentActiveCallPeer.clear();
+            stopRingtone();
             if (m_audioEngine) m_audioEngine->stop();
             emit callEnded();
-            // Сюда можно будет повесить текстовый нотис "Абонент занят"
         }
     }
     else if (type == "call_end") {
         if (m_currentActiveCallPeer == senderName) {
             m_inCall = false;
             m_currentActiveCallPeer.clear();
+            stopRingtone();
             if (m_audioEngine) m_audioEngine->stop();
             emit callEnded();
         }
     }
 }
+
 void NetworkEngine::sendHeartbeat()
 {
     QJsonObject json;
@@ -305,6 +355,13 @@ void NetworkEngine::sendHeartbeat()
         }
     }
 
+    // ЧИСТЫЙ ФИКС: Защищаем одиночный P2P звонок от вмешательства таймера.
+    // Если мы находимся в обычном звонке один на один (m_currentActiveCallPeer не пустой),
+    // игнорируем логику групповой конференции, чтобы таймер случайно не перезапустил рингтон.
+    if (!m_currentActiveCallPeer.isEmpty()) {
+        return;
+    }
+
     if (conferenceChanged) {
         if (m_activeCallPeers.isEmpty()) {
             m_inCall = false;
@@ -313,7 +370,7 @@ void NetworkEngine::sendHeartbeat()
             }
             emit callEnded();
         } else {
-            emit callAccepted();
+        emit callAccepted(!m_activeCallPeers.isEmpty() ? m_activeCallPeers.first() : "");
         }
     }
 }
@@ -385,6 +442,7 @@ void NetworkEngine::handleAudioFrameReady(const QByteArray &frame)
         }
     }
 }
+
 void NetworkEngine::broadcastDatagram(const QJsonObject &json)
 {
     QJsonDocument doc(json);
@@ -415,5 +473,66 @@ void NetworkEngine::broadcastDatagram(const QJsonObject &json)
                 }
             }
         }
+    }
+}
+
+void NetworkEngine::startRingtone()
+{
+    stopRingtone();
+
+    QAudioDevice currentOutput = QMediaDevices::defaultAudioOutput();
+
+    m_ringtone = new QSoundEffect(currentOutput, this);
+    m_ringtone->setLoopCount(QSoundEffect::Infinite);
+    m_ringtone->setVolume(0.8f);
+    m_ringtone->setSource(QUrl(QStringLiteral("qrc:/qt/qml/TeleLoc/ring1.wav")));
+
+    if (m_ringtone->status() == QSoundEffect::Loading) {
+        // Делаем обычный коннект БЕЗ флага UniqueConnection
+        connect(m_ringtone, &QSoundEffect::statusChanged, this, [this]() {
+            if (m_ringtone && m_ringtone->status() == QSoundEffect::Ready) {
+                // Отключаем сигнал СРАЗУ, как только файл готов, чтобы лямбда не вызвалась повторно
+                disconnect(m_ringtone, &QSoundEffect::statusChanged, this, nullptr);
+                if (!m_ringtone->isPlaying()) {
+                    m_ringtone->play();
+                }
+            }
+        });
+    } else if (m_ringtone->status() == QSoundEffect::Ready) {
+        m_ringtone->play();
+    }
+}
+void NetworkEngine::stopRingtone()
+{
+    if (m_ringtone && m_ringtone->isPlaying()) {
+        m_ringtone->stop();
+    }
+}
+
+void NetworkEngine::playMessageSound()
+{
+    if (m_msgSound) {
+        m_msgSound->stop();
+        m_msgSound->deleteLater();
+        m_msgSound = nullptr;
+    }
+
+    QAudioDevice currentOutput = QMediaDevices::defaultAudioOutput();
+
+    m_msgSound = new QSoundEffect(currentOutput, this);
+    m_msgSound->setLoopCount(1);
+    m_msgSound->setVolume(0.7f);
+    m_msgSound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/TeleLoc/ring2.wav")));
+
+    if (m_msgSound->status() == QSoundEffect::Loading) {
+        // Аналогично убираем UniqueConnection для звука чата
+        connect(m_msgSound, &QSoundEffect::statusChanged, this, [this]() {
+            if (m_msgSound && m_msgSound->status() == QSoundEffect::Ready) {
+                disconnect(m_msgSound, &QSoundEffect::statusChanged, this, nullptr);
+                m_msgSound->play();
+            }
+        });
+    } else if (m_msgSound->status() == QSoundEffect::Ready) {
+        m_msgSound->play();
     }
 }

@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
     // Регистрируем его в QML под именем netEngine для доступа из интерфейса
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
 
-    const QUrl url(QStringLiteral("qrc:/TeleLoc/Main.qml"));
+    const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
         &app, [url](QObject *obj, const QUrl &objUrl) {
             if (!obj && url == objUrl)

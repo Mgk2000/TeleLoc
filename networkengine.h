@@ -11,6 +11,8 @@
 #include <QSettings>
 #include <QJsonObject>
 #include <QVector>
+#include <QSoundEffect>
+#include <QUrl>
 #include "audioengine.h"
 
 class NetworkEngine : public QObject
@@ -44,7 +46,7 @@ signals:
     void messageReceived(const QString &sender, const QString &text);
     void peerListChanged();
     void incomingCall(const QString &peerName);
-    void callAccepted();
+    void callAccepted(const QString &peerName);
     void callEnded();
     void requestOpenChat(const QString &peerName);
     void micLevelChanged();
@@ -63,6 +65,8 @@ private:
 
     void broadcastDatagram(const QJsonObject &json);
     void processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress);
+    void startRingtone();
+    void stopRingtone();
 
     QUdpSocket *m_udpSocket = nullptr;
     QUdpSocket *m_sendUdpSocket = nullptr;
@@ -79,6 +83,11 @@ private:
 
     AudioEngine *m_audioEngine = nullptr;
     QTimer *m_heartbeatTimer = nullptr;
+    QSoundEffect *m_ringtone = nullptr;   // Для звонков (ring1.wav)
+    QSoundEffect *m_msgSound = nullptr;   // Для чата (ring2.wav)
+
+
+    void playMessageSound();              // Короткий звук для уведомлений
 
     QHash<QString, PeerInfo> m_discoveredPeers;
     QStringList m_activeCallPeers;
