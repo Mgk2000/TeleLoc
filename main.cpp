@@ -5,6 +5,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "networkengine.h"
+#include "wifidirectengine.h"
 
 int main(int argc, char *argv[])
 {
@@ -17,11 +18,11 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
-    // Создаем единственный корневой сетевой движок
     NetworkEngine netEngine;
+    WifiDirectEngine wdEngine;
 
-    // Регистрируем его в QML под именем netEngine для доступа из интерфейса
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
+    engine.rootContext()->setContextProperty("wdEngine", &wdEngine);
 
     const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

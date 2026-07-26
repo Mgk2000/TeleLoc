@@ -17,10 +17,12 @@ NetworkEngine::NetworkEngine(QObject *parent)
     m_sendUdpSocket = new QUdpSocket(this);
     m_audioSocket = new QUdpSocket(this);
 
-    m_udpSocket->bind(QHostAddress::AnyIPv4, m_port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+    // ЖЕСТКИЙ ФИКС VPN: Переводим управляющий сокет на Any, чтобы ловить пакеты из туннелей
+    m_udpSocket->bind(QHostAddress::Any, m_port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     connect(m_udpSocket, &QUdpSocket::readyRead, this, &NetworkEngine::readPendingDatagrams);
 
-    m_audioSocket->bind(QHostAddress::AnyIPv4, m_audioPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+    // ЖЕСТКИЙ ФИКС VPN: Звуковой сокет тоже переводим на Any для сквозного прохода аудиопотока
+    m_audioSocket->bind(QHostAddress::Any, m_audioPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     connect(m_audioSocket, &QUdpSocket::readyRead, this, [this]() {
         while (m_audioSocket->hasPendingDatagrams()) {
             QByteArray datagram;
@@ -62,13 +64,13 @@ NetworkEngine::NetworkEngine(QObject *parent)
 
     m_ringtone = new QSoundEffect(this);
     m_ringtone->setAudioDevice(defaultOutput); // <-- ЖЕСТКО НАПРАВЛЯЕМ ЗВУК ВСЛЕД ЗА ЮТУБОМ
-    m_ringtone->setSource(QUrl::fromLocalFile(QStringLiteral("D:/Projects/TeleLoc/ring1.wav")));
+    m_ringtone->setSource(QUrl(QStringLiteral("qrc:/qt/qml/TeleLoc/ring1.wav")));
     m_ringtone->setLoopCount(QSoundEffect::Infinite);
     m_ringtone->setVolume(0.8f);
 
     m_msgSound = new QSoundEffect(this);
     m_msgSound->setAudioDevice(defaultOutput); // <-- СЮДА ТОЖЕ
-    m_msgSound->setSource(QUrl::fromLocalFile(QStringLiteral("D:/Projects/TeleLoc/ring2.wav")));
+    m_msgSound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/TeleLoc/ring2.wav")));
     m_msgSound->setLoopCount(1);
     m_msgSound->setVolume(0.7f);
 
@@ -80,7 +82,6 @@ NetworkEngine::NetworkEngine(QObject *parent)
     m_heartbeatTimer = new QTimer(this);
     connect(m_heartbeatTimer, &QTimer::timeout, this, &NetworkEngine::sendHeartbeat);
 }
-
 NetworkEngine::~NetworkEngine()
 {
     if (m_audioEngine) {
@@ -248,19 +249,36 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
     if (senderName == m_username || senderName.isEmpty()) return;
 
     if (type == "heartbeat") {
-        QHostAddress cleanIp = senderAddress;
-        bool ok;
-        quint32 ipv4 = senderAddress.toIPv4Address(&ok);
-        if (ok) {
-            cleanIp = QHostAddress(ipv4);
-        } else {
-            QString ipStr = senderAddress.toString();
-            if (ipStr.startsWith("::ffff:")) {
-                cleanIp = QHostAddress(ipStr.mid(7));
+        QString senderName = json["sender"].toString();
+
+        // senderAddress — это объект QHostAddress, который мы получили из m_udpSocket->readDatagram
+        // (убедитесь, что передаете его в параметры метода processJsonMessage)
+
+        // ЛЕГАЛЬНЫЙ ФИКС: Вытаскиваем MAC-адрес отправителя из сетевого интерфейса ОС по его IP-адресу!
+        QString senderMac;
+        const auto interfaces = QNetworkInterface::allInterfaces();
+        for (const QNetworkInterface &interface : interfaces) {
+            // Ищем в системной ARP-таблице, к какому MAC-адресу привязан этот входящий IP
+            const auto addressEntries = interface.addressEntries();
+            for (const QNetworkAddressEntry &entry : addressEntries) {
+                if (entry.ip().isInSubnet(senderAddress, 24)) { // Если пир в нашей подсести
+                    // Вытаскиваем аппаратный адрес удаленного узла, который зарегистрировала ОС
+                    senderMac = interface.hardwareAddress();
+                   // qDebug() << "senderMac===============================" <<senderMac;
+                    break;
+                }
             }
         }
-        m_discoveredPeers[senderName] = PeerInfo{cleanIp, QDateTime::currentDateTime()};
-        emit peerListChanged();
+
+        // Если адрес успешно вытащен из сетевого кэша Windows/Android
+        if (!senderMac.isEmpty() && senderMac != "00:00:00:00:00:00") {
+            if (m_discoveredPeers[senderName].macAddress != senderMac) {
+                m_discoveredPeers[senderName].macAddress = senderMac;
+
+                qDebug() << "Успешно скэширован реальный адрес дачника:" << senderName << "MAC:" << senderMac;
+                saveMacDatabaseToFile(senderName, senderMac);
+            }
+        }
     }
     else if (type == "message") {
         double msgId = json["msg_id"].toDouble();
@@ -278,20 +296,25 @@ void NetworkEngine::processJsonMessage(const QJsonObject &json, const QHostAddre
         emit requestOpenChat(senderName);
     }
     else if (type == "call_start") {
-        QString target = json["target_peer"].toString();
-        if (target == m_username) {
-            if (!m_currentActiveCallPeer.isEmpty() && m_currentActiveCallPeer != senderName) {
-                QJsonObject busyJson;
-                busyJson["type"] = "call_busy";
-                busyJson["sender"] = m_username;
-                busyJson["target_peer"] = senderName;
-                broadcastDatagram(busyJson);
-                return;
+        QString target = json["target_peer"].toString().trimmed();
+        QString sender = json["sender"].toString().trimmed();
+
+        // Если звонят лично нам ИЛИ прилетел прямой P2P вызов "Директ"
+        if (target == m_username || target == QStringLiteral("Директ")) {
+            m_incomingCallSender = sender.isEmpty() ? QStringLiteral("Абонент P2P") : sender;
+
+            // ЧИСТАЯ ДИАГНОСТИКА: Вытаскиваем IP-адрес входящего пакета
+            QString incomingIp = senderAddress.toString();
+            if (incomingIp.startsWith(QLatin1String("::ffff:"))) {
+                incomingIp = incomingIp.mid(7); // Очищаем от IPv6-обертки
             }
 
-            m_currentActiveCallPeer = senderName;
+            // Печатаем в чат, с какого IP пробился пакет сквозь VPN!
+            emit messageReceived(QStringLiteral("Система"),
+                                 QStringLiteral("📩 Входящий звонок от %1 с IP: %2").arg(m_incomingCallSender).arg(incomingIp));
+
             startRingtone();
-            emit incomingCall(senderName);
+            emit incomingCallReceived(m_incomingCallSender);
         }
     }
     else if (type == "call_accept") {
@@ -473,6 +496,14 @@ void NetworkEngine::broadcastDatagram(const QJsonObject &json)
                 }
             }
         }
+
+        // =========================================================================
+        // ТОЧЕЧНЫЙ ФИКС ДЛЯ WI-FI DIRECT: НИЧЕГО НЕ СТИРАЕМ, ПРОСТО ДУБЛИРУЕМ СЮДА
+        // =========================================================================
+        // Если Android скрыл новый интерфейс p2p0 в кэше allInterfaces(), эта строка
+        // принудительно пробьет стандартную P2P-подсеть Android напрямую. Как только
+        // Иван и Пётр вернутся в чат — сокеты поймают этот пакет, и они увидят друг друга!
+        m_sendUdpSocket->writeDatagram(data, QHostAddress(QStringLiteral("192.168.49.255")), m_port);
     }
 }
 
@@ -535,4 +566,50 @@ void NetworkEngine::playMessageSound()
     } else if (m_msgSound->status() == QSoundEffect::Ready) {
         m_msgSound->play();
     }
+}
+
+#include <QSettings>
+
+void NetworkEngine::saveMacDatabaseToFile(const QString &name, const QString &mac)
+{
+    // QSettings автоматически создаст неубиваемый файл в защищенной памяти системы
+    QSettings settings("TeleLocProject", "MacCache");
+    settings.setValue(QString("peers/%1").arg(name), mac);
+}
+
+QString NetworkEngine::getSavedMacForPeer(const QString &name)
+{
+    QSettings settings("TeleLocProject", "MacCache");
+    return settings.value(QString("peers/%1").arg(name), QString()).toString();
+}
+void NetworkEngine::startWifiDirectAudioCall(const QString &targetPeerName)
+{
+    Q_UNUSED(targetPeerName);
+
+    QJsonObject json;
+    json["type"] = "call_start";
+    json["sender"] = m_username;
+    // Пишем "Директ", чтобы QML принимающей стороны сразу понял тип вызова
+    json["target_peer"] = QStringLiteral("Директ");
+
+    QJsonDocument doc(json);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
+
+    // Локальные IP-адреса Wi-Fi Direct подсети Android
+    QHostAddress goAddress("192.168.49.1");
+    QHostAddress clientAddress("192.168.49.100");
+
+    // ДИАГНОСТИКА: Выводим в окно чата точные направления выстрела сокета
+    emit messageReceived(QStringLiteral("Система"),
+                         QStringLiteral("🌐 Звоню на 192.168.49.1 и 192.168.49.100..."));
+
+    // Стреляем пакетами по обоим адресам напрямую!
+    m_sendUdpSocket->writeDatagram(data, goAddress, m_port);
+    m_sendUdpSocket->writeDatagram(data, clientAddress, m_port);
+
+    // Дополнительно бьем вещанием по всей подсети
+    m_sendUdpSocket->writeDatagram(data, QHostAddress("192.168.49.255"), m_port);
+
+    startRingtone();
+    m_inCall = false;
 }

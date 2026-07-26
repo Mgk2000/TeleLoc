@@ -95,11 +95,14 @@ Window {
     }
 
     Component.onCompleted: {
-        if (!netEngine.isRegistered()) {
-            netEngine.saveNameToFile("Пользователь")
+        // Если пользователь уже вводил имя ранее — стартуем сразу
+        if (netEngine.isRegistered() && netEngine.getSavedName() !== "Пользователь") {
+            netEngine.start(netEngine.getSavedName())
+            window.updateDropdowns()
+        } else {
+            // Иначе открываем окно логина
+            loginOverlay.visible = true
         }
-        netEngine.start(netEngine.getSavedName())
-        window.updateDropdowns()
     }
 
     Column {
@@ -205,6 +208,40 @@ Window {
                     }
                 }
 
+                // ... Ваша стандартная кнопка audioMenuButton (📞) ...
+
+                // ========================================================
+                // КНОПКА: ВЫДЕЛЕННЫЙ ЗВОНОК ПО WI-FI DIRECT
+                // ========================================================
+                // ========================================================
+                // КНОПКА: ВЫДЕЛЕННЫЙ ЗВОНОК ПО WI-FI DIRECT (🌐📞) С МЕНЮ
+                // ========================================================
+                // ========================================================
+                // КНОПКА: ВЫДЕЛЕННЫЙ ЗВОНОК ПО WI-FI DIRECT (🌐📞) С МЕНЮ
+                // ========================================================
+                // ========================================================
+                // КНОПКА: СУПЕР-ПРОСТОЙ ЗВОНОК ПО WI-FI DIRECT (🌐📞)
+                // ========================================================
+                Button {
+                    id: wifiDirectCallButton
+                    width: 55
+                    height: 60
+                    background: Rectangle {
+                        color: "#2980b9"
+                        radius: 8
+                    }
+                    contentItem: Text {
+                        text: "🌐📞"
+                        font.pixelSize: 22
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: {
+                        // Вызываем C++ метод авто-сканирования подсети P2P
+                        netEngine.startWifiDirectAudioCall("AUTO")
+                    }
+                }
+
                 Button {
                     id: debugToneButton
                     width: 55
@@ -232,6 +269,55 @@ Window {
                         }
                     }
                 }
+                // ========================================================
+                   // КНОПКА ГИБРИДИЗАЦИИ: ПОИСК УСТРОЙСТВ WI-FI DIRECT
+                   // ========================================================
+                   Button {
+                       id: wifiDirectButton
+                       width: 55
+                       height: 60
+                       background: Rectangle {
+                           color: "#34495e"
+                           radius: 8
+                       }
+                       Connections {
+                           target: wdEngine
+                           function onConnectionSuccess(info) {
+                               // Просто пишем в консоль, что запрос по MAC-адресу улетел в эфир!
+                               console.log("Wi-Fi Direct: " + info)
+                           }
+                           function onConnectionFailed(reason) {
+                               console.log("Ошибка P2P: " + reason)
+                           }
+                       }
+
+                       contentItem: Text {
+                           text: "🌐"
+                           font.pixelSize: 28
+                           horizontalAlignment: Text.AlignHCenter
+                           verticalAlignment: Text.AlignVCenter
+                       }
+                       onClicked: {
+                           wdEngine.startDiscovery() // Запускаем С++ поиск чипом
+                           wifiDirectMenu.popup()    // Открываем меню списка устройств
+                       }
+
+                       Menu {
+                           id: wifiDirectMenu
+                           Instantiator {
+                               model: wdEngine.discoveredDevices // Связываем со списком из C++
+                               onObjectAdded: (index, object) => wifiDirectMenu.insertItem(index, object)
+                               onObjectRemoved: (index, object) => wifiDirectMenu.removeItem(object)
+                               delegate: MenuItem {
+                                   text: modelData
+                                   onTriggered: {
+                                       wdEngine.connectToDevice(modelData) // Подключаемся по клику
+                                       wifiDirectMenu.close()
+                                   }
+                               }
+                           }
+                       }
+                   }
 
                 Column {
                     width: parent.width - 215
@@ -491,4 +577,52 @@ Window {
             }
         }
     }
-}
+    // ==========================================
+    // ФИКС ДЛЯ МАРЬИ: ОКНО СТАРТОВОГО ЛОГИНА
+    // ==========================================
+    Rectangle {
+        id: loginOverlay
+        anchors.fill: parent
+        color: "#2c3e50" // Темный фон
+        visible: false
+        z: 30 // Поверх всех элементов
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 20
+            width: parent.width * 0.8
+
+            Text {
+                text: "Добро пожаловать!\nВведите ваше имя:"
+                color: "white"
+                font.pixelSize: 20
+                horizontalAlignment: Text.AlignHCenter
+                width: parent.width
+            }
+
+            TextField {
+                id: usernameInput
+                width: parent.width
+                placeholderText: "Например: Марья"
+                onAccepted: loginButton.clicked() // Enter для входа
+            }
+
+            Button {
+                id: loginButton
+                text: "Войти в сеть"
+                width: parent.width
+                onClicked: {
+                    var name = usernameInput.text.trim()
+                    if (name !== "" && name !== "Пользователь") {
+                        netEngine.saveNameToFile(name)
+                        netEngine.start(name)
+                        loginOverlay.visible = false
+                        window.updateDropdowns()
+                    }
+                }
+            }
+        }
+    }
+} // Конец самого главного Window
+
+

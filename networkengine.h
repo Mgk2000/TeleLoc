@@ -37,6 +37,7 @@ public:
     Q_INVOKABLE void saveNameToFile(const QString &name);
     Q_INVOKABLE QString getSavedName() const;
     Q_INVOKABLE bool isRegistered() const;
+    Q_INVOKABLE void startWifiDirectAudioCall(const QString &targetPeerName); // Звонок по Директ
 
     QStringList peerList() const;
     int micLevel() const { return m_micLevel; }
@@ -51,6 +52,7 @@ signals:
     void requestOpenChat(const QString &peerName);
     void micLevelChanged();
     void netLevelChanged();
+    void incomingCallReceived(const QString &senderName);
 
 private slots:
     void readPendingDatagrams();
@@ -61,6 +63,7 @@ private:
     struct PeerInfo {
         QHostAddress address;
         QDateTime lastSeen;
+        QString macAddress; // <-- ДОБАВИЛИ СЮДА
     };
 
     void broadcastDatagram(const QJsonObject &json);
@@ -97,5 +100,9 @@ private:
     double m_debugFrequency = 0.0;
     double m_debugPhase = 0.0;
     QString m_currentActiveCallPeer;
+    void saveMacDatabaseToFile(const QString &name, const QString &mac);
+    QString getSavedMacForPeer(const QString &name);
+    QString m_incomingCallSender; // Переменная для хранения имени звонящего дачника
+
 };
 #endif // NETWORKENGINE_H
