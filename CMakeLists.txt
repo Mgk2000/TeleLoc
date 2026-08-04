@@ -28,6 +28,9 @@ qt_add_executable(appTeleLoc WIN32
     networkengine.cpp networkengine.h
     audioengine.cpp audioengine.h
 )
+if(ANDROID)
+    set_property(TARGET appTeleLoc PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
+endif()
 
 # QML-модуль
 qt_add_qml_module(appTeleLoc
@@ -45,6 +48,9 @@ qt_add_qml_module(appTeleLoc
 target_link_libraries(appTeleLoc PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Network Qt6::Multimedia
 )
+if(ANDROID)
+    set(ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android)
+endif()
 
 # Включаем текущую директорию для поиска заголовочных файлов
 target_include_directories(appTeleLoc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

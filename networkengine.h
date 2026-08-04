@@ -3,99 +3,73 @@
 
 #include <QObject>
 #include <QUdpSocket>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
-#include <QDateTime>
+#include <QVariantList>
 #include <QHostAddress>
+#include <QDateTime>
 #include <QList>
-#include <QHash>
-#include <QSettings>
-#include <QJsonObject>
-#include <QVector>
-#include <QSoundEffect>
-#include <QUrl>
-#include "audioengine.h"
+
+struct UserInfo {
+    QString name;
+    QString ip0;
+    QString ip1;
+    QString ip2;
+    QDateTime lastSeen;
+    bool isAlive;
+};
 
 class NetworkEngine : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QStringList peerList READ peerList NOTIFY peerListChanged)
-    Q_PROPERTY(int micLevel READ micLevel NOTIFY micLevelChanged)
-    Q_PROPERTY(int netLevel READ netLevel NOTIFY netLevelChanged)
+    Q_PROPERTY(QVariantList activeUsers READ activeUsers NOTIFY activeUsersChanged)
+    Q_PROPERTY(QVariantList p2pPeers READ p2pPeers NOTIFY p2pPeersChanged)
 
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
     ~NetworkEngine();
 
-    Q_INVOKABLE void start(const QString &username);
-    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
-    Q_INVOKABLE void startChatSession(const QString &targetPeerName);
+    Q_INVOKABLE void sendMessage(const QString &targetIp, const QString &message);
     Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
-    Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName);
-    Q_INVOKABLE void stopAudioCall();
-    Q_INVOKABLE void setDebugFrequency(double hz);
-
-    Q_INVOKABLE void saveNameToFile(const QString &name);
-    Q_INVOKABLE QString getSavedName() const;
+    Q_INVOKABLE void startWifiDirectScan();
+    Q_INVOKABLE void connectToWifiDirectDevice(const QString &macAddress);
+    Q_INVOKABLE void tryConnectToMaster();
     Q_INVOKABLE bool isRegistered() const;
+    Q_INVOKABLE QString getSavedName() const;
+    Q_INVOKABLE void createAndroidP2pGroup();
+    Q_INVOKABLE void debugUsers() const;
+    Q_INVOKABLE QVariantList getUsers(int netType) const;
 
-    QStringList peerList() const;
-    int micLevel() const { return m_micLevel; }
-    int netLevel() const { return m_netLevel; }
+    QVariantList activeUsers() const;
+    QVariantList p2pPeers() const;
 
 signals:
-    void messageReceived(const QString &sender, const QString &text);
-    void peerListChanged();
-    void incomingCall(const QString &peerName);
-    void callAccepted(const QString &peerName);
-    void callEnded();
-    void requestOpenChat(const QString &peerName);
-    void micLevelChanged();
-    void netLevelChanged();
+    void activeUsersChanged();
+    void p2pPeersChanged();
+    void messageReceived(QString fromIp, QString message);
 
 private slots:
+    void sendDiscovery();
     void readPendingDatagrams();
-    void sendHeartbeat();
-    void handleAudioFrameReady(const QByteArray &frame);
+    void onNewConnection();
+    void onReadyTcpRead();
 
 private:
-    struct PeerInfo {
-        QHostAddress address;
-        QDateTime lastSeen;
-    };
-
-    void broadcastDatagram(const QJsonObject &json);
-    void processJsonMessage(const QJsonObject &json, const QHostAddress &senderAddress);
-    void startRingtone();
-    void stopRingtone();
-
-    QUdpSocket *m_udpSocket = nullptr;
-    QUdpSocket *m_sendUdpSocket = nullptr;
-    QUdpSocket *m_audioSocket = nullptr;
-
-    int m_port = 45455;
-    int m_audioPort = 45456;
-
-    QString m_username;
-    bool m_inCall = false;
-
-    int m_micLevel = 0;
-    int m_netLevel = 0;
-
-    AudioEngine *m_audioEngine = nullptr;
-    QTimer *m_heartbeatTimer = nullptr;
-    QSoundEffect *m_ringtone = nullptr;   // Для звонков (ring1.wav)
-    QSoundEffect *m_msgSound = nullptr;   // Для чата (ring2.wav)
-
-
-    void playMessageSound();              // Короткий звук для уведомлений
-
-    QHash<QString, PeerInfo> m_discoveredPeers;
-    QStringList m_activeCallPeers;
-    QList<double> m_processedMessageIds;
-    QByteArray m_netAudioBuffer;
-
-    double m_debugFrequency = 0.0;
-    double m_debugPhase = 0.0;
-    QString m_currentActiveCallPeer;
+    void readConfig();
+    void updateInterfaces();
+    void sendUsersDataTcp(QTcpSocket *socket);
+    QUdpSocket *udpSocket;
+    QTcpServer *tcpServer;
+    QTcpSocket *tcpSocket;
+    QTcpSocket *tcpClientSocket;
+    QTimer *discoveryTimer;
+    QTimer *interfaceTimer;
+    QList<UserInfo> m_users;
+    QVariantList m_p2pPeersList;
+    const QString SERVER_IP = "192.168.49.1";
+    const quint16 PORT = 45455;
+        void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
 };
-#endif // NETWORKENGINE_H
+
+#endif
