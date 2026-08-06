@@ -6,10 +6,14 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
-#include <QVariantList>
-#include <QHostAddress>
 #include <QDateTime>
+#include <QHostAddress>
 #include <QList>
+#include <QVariantList>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QStringList>
+#include "audioengine.h"
 
 struct UserInfo {
     QString name;
@@ -23,31 +27,30 @@ struct UserInfo {
 class NetworkEngine : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QVariantList activeUsers READ activeUsers NOTIFY activeUsersChanged)
-    Q_PROPERTY(QVariantList p2pPeers READ p2pPeers NOTIFY p2pPeersChanged)
 
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
     ~NetworkEngine();
 
-    Q_INVOKABLE void sendMessage(const QString &targetIp, const QString &message);
-    Q_INVOKABLE void startAudioCall(const QString &targetPeerName);
-    Q_INVOKABLE void startWifiDirectScan();
-    Q_INVOKABLE void connectToWifiDirectDevice(const QString &macAddress);
-    Q_INVOKABLE void tryConnectToMaster();
-    Q_INVOKABLE bool isRegistered() const;
-    Q_INVOKABLE QString getSavedName() const;
-    Q_INVOKABLE void createAndroidP2pGroup();
-    Q_INVOKABLE void debugUsers() const;
     Q_INVOKABLE QVariantList getUsers(int netType) const;
+    Q_INVOKABLE bool isNetTypeAvailable(int netType) const;
 
-    QVariantList activeUsers() const;
-    QVariantList p2pPeers() const;
+    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
+    Q_INVOKABLE void startAudioCall(const QString &targetPeerName, int netType);
+    Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName, int netType);
+    Q_INVOKABLE void stopAudioCall();
+
+    Q_INVOKABLE QString getSavedName() const;
+    Q_INVOKABLE void saveNameToFile(const QString &name);
+    Q_INVOKABLE bool isRegistered() const { return true; }
+    Q_INVOKABLE void debugUsers() const;
 
 signals:
-    void activeUsersChanged();
-    void p2pPeersChanged();
-    void messageReceived(QString fromIp, QString message);
+    void peerListChanged();
+    void messageReceived(QString fromIp, QString text);
+    void incomingCall(QString peerName, int netType);
+    void callAccepted();
+    void callStopped();
 
 private slots:
     void sendDiscovery();
@@ -58,18 +61,23 @@ private slots:
 private:
     void readConfig();
     void updateInterfaces();
-    void sendUsersDataTcp(QTcpSocket *socket);
+    void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
+
     QUdpSocket *udpSocket;
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;
     QTcpSocket *tcpClientSocket;
+
     QTimer *discoveryTimer;
     QTimer *interfaceTimer;
+    AudioEngine *audioEngine;
+
     QList<UserInfo> m_users;
-    QVariantList m_p2pPeersList;
-    const QString SERVER_IP = "192.168.49.1";
+    QString m_activePeerIp;
+    int m_activeCallNetType;
+
     const quint16 PORT = 45455;
-        void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
+    const QString SERVER_IP = "192.168.49.1";
 };
 
 #endif
