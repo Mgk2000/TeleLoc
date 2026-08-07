@@ -31,28 +31,51 @@ ApplicationWindow {
         var apTmp = []
         var directTmp = []
         var myName = "Пользователь"
+
         try {
             var saved = netEngine.getSavedName()
             if (saved && saved !== "") myName = saved
         } catch(e) {}
 
+        var uniqueChatPeers = {}
+        var netTypes = [0, 1, 2]
+        var totalPeersCount = 0
+
+        for (var n = 0; n < netTypes.length; n++) {
+            var users = netEngine.getUsers(netTypes[n])
+            for (var u = 0; u < users.length; u++) {
+                if (users[u].name !== myName) {
+                    if (!uniqueChatPeers[users[u].name]) {
+                        uniqueChatPeers[users[u].name] = true
+                        totalPeersCount++
+                    }
+                }
+            }
+        }
+
+        for (var peer in uniqueChatPeers) {
+            if (peer !== window.activeChatPeer) {
+                textTmp.push(peer)
+            }
+        }
+
+        if (totalPeersCount > 1) {
+            textTmp.push("Все")
+        }
+
         var lanUsers = netEngine.getUsers(0)
         for (var i = 0; i < lanUsers.length; i++) {
-            if (lanUsers[i].name === myName) continue
-            if (lanUsers[i].name !== window.activeChatPeer) textTmp.push(lanUsers[i].name)
-            if (window.activeConferencePeers.indexOf(lanUsers[i].name) === -1) lanTmp.push(lanUsers[i].name)
+            if (lanUsers[i].name !== myName && window.activeConferencePeers.indexOf(lanUsers[i].name) === -1) lanTmp.push(lanUsers[i].name)
         }
 
         var apUsers = netEngine.getUsers(1)
         for (var j = 0; j < apUsers.length; j++) {
-            if (apUsers[j].name === myName) continue
-            if (window.activeConferencePeers.indexOf(apUsers[j].name) === -1) apTmp.push(apUsers[j].name)
+            if (apUsers[j].name !== myName && window.activeConferencePeers.indexOf(apUsers[j].name) === -1) apTmp.push(apUsers[j].name)
         }
 
         var directUsers = netEngine.getUsers(2)
         for (var k = 0; k < directUsers.length; k++) {
-            if (directUsers[k].name === myName) continue
-            if (window.activeConferencePeers.indexOf(directUsers[k].name) === -1) directTmp.push(directUsers[k].name)
+            if (directUsers[k].name !== myName && window.activeConferencePeers.indexOf(directUsers[k].name) === -1) directTmp.push(directUsers[k].name)
         }
 
         if (window.activeChatPeer !== "") textTmp.push("❌ Выйти")
@@ -157,20 +180,32 @@ ApplicationWindow {
                             model: window.textDropdownArray
                             onObjectAdded: (index, object) => chatMenu.insertItem(index, object)
                             onObjectRemoved: (index, object) => chatMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: modelData
-                                onTriggered: {
-                                    if (modelData === "❌ Выйти") {
-                                        window.activeChatPeer = ""
-                                    } else {
-                                        window.activeChatPeer = modelData
+                            delegate: Column {
+                                width: parent ? parent.width : 0
+
+                                MenuSeparator {
+                                    width: parent.width
+                                    visible: modelData === "Все" || modelData === "❌ Выйти"
+                                }
+
+                                MenuItem {
+                                    width: parent.width
+                                    text: modelData
+                                    onTriggered: {
+                                        var choice = modelData
+                                        chatMenu.close()
+                                        if (choice === "❌ Выйти") {
+                                            window.activeChatPeer = ""
+                                        } else {
+                                            window.activeChatPeer = choice
+                                        }
+                                        window.updateDropdowns()
                                     }
-                                    window.updateDropdowns()
                                 }
                             }
                         }
                     }
-                }
+                 }
 
                 Button {
                     id: settingsButton
@@ -248,7 +283,7 @@ ApplicationWindow {
                     }
                     onClicked: {
                         if (window.activeCallNetType === 0) {
-                            Qt.callLater("executeAudioCall", "", -1) // Сброс вызова через безопасный мост
+                            netEngine.stopAudioCall()
                         } else {
                             callLanMenu.open()
                         }
@@ -262,16 +297,15 @@ ApplicationWindow {
                             onObjectAdded: (index, object) => callLanMenu.insertItem(index, object)
                             onObjectRemoved: (index, object) => callLanMenu.removeItem(object)
                             delegate: MenuItem {
-                                required property string modelData
                                 text: modelData
                                 onTriggered: {
                                     var name = modelData
+                                    var engineLink = netEngine
                                     callLanMenu.close()
                                     window.activeConferencePeers = name
                                     window.activeCallNetType = 0
                                     window.updateDropdowns()
-                                    // Прямой, моментальный выстрел сигнала в окно!
-                                    requestLanCall(name)
+                                    engineLink.startAudioCall(name, 0)
                                 }
                             }
                         }
@@ -294,7 +328,7 @@ ApplicationWindow {
                     }
                     onClicked: {
                         if (window.activeCallNetType === 1) {
-                            Qt.callLater("executeAudioCall", "", -1)
+                            netEngine.stopAudioCall()
                         } else {
                             callApMenu.open()
                         }
@@ -308,15 +342,15 @@ ApplicationWindow {
                             onObjectAdded: (index, object) => callApMenu.insertItem(index, object)
                             onObjectRemoved: (index, object) => callApMenu.removeItem(object)
                             delegate: MenuItem {
-                                required property string modelData
                                 text: modelData
                                 onTriggered: {
                                     var name = modelData
+                                    var engineLink = netEngine
                                     callApMenu.close()
                                     window.activeConferencePeers = name
                                     window.activeCallNetType = 1
                                     window.updateDropdowns()
-                                    requestApCall(name)
+                                    engineLink.startAudioCall(name, 1)
                                 }
                             }
                         }
@@ -339,7 +373,7 @@ ApplicationWindow {
                     }
                     onClicked: {
                         if (window.activeCallNetType === 2) {
-                            Qt.callLater("executeAudioCall", "", -1)
+                            netEngine.stopAudioCall()
                         } else {
                             callDirectMenu.open()
                         }
@@ -353,14 +387,15 @@ ApplicationWindow {
                             onObjectAdded: (index, object) => callDirectMenu.insertItem(index, object)
                             onObjectRemoved: (index, object) => callDirectMenu.removeItem(object)
                             delegate: MenuItem {
-                                required property string modelData
                                 text: modelData
                                 onTriggered: {
                                     var name = modelData
+                                    var engineLink = netEngine
                                     callDirectMenu.close()
-                                    Qt.callLater(function() {
-                                        executeAudioCall(name, 2)
-                                    })
+                                    window.activeConferencePeers = name
+                                    window.activeCallNetType = 2
+                                    window.updateDropdowns()
+                                    engineLink.startAudioCall(name, 2)
                                 }
                             }
                         }

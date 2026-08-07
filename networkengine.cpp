@@ -192,32 +192,80 @@ void NetworkEngine::readPendingDatagrams() {
 void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) {
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
+
+    QJsonObject obj;
+    obj["type"] = "message";
+    obj["name"] = me.name;
+    obj["text"] = text;
+    QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+
+    // РЕЖИМ 1: Вещание на "Все"
+    if (targetPeer == "Все") {
+        bool udpSent = false;
+
+        // Если у нас активны LAN или AP интерфейсы, бьем широким UDP-вещанием
+        if (!me.ip0.isEmpty()) {
+            udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), PORT);
+            udpSent = true;
+        }
+        if (!me.ip1.isEmpty()) {
+            udpSocket->writeDatagram(data, QHostAddress("192.168.43.255"), PORT);
+            udpSocket->writeDatagram(data, QHostAddress("192.168.137.255"), PORT);
+            udpSent = true;
+        }
+
+        // Если UDP пустить некуда (мы сидим строго в Wi-Fi Direct), делаем веерную рассылку по TCP
+        if (!udpSent || !me.ip2.isEmpty()) {
+            for (int i = 1; i < m_users.size(); ++i) {
+                if (m_users[i].isAlive) {
+                    QString directIp = m_users[i].ip2;
+                    if (!directIp.isEmpty()) {
+                        QTcpSocket tmpSocket;
+                        tmpSocket.connectToHost(directIp, PORT);
+                        if (tmpSocket.waitForConnected(500)) {
+                            tmpSocket.write(data);
+                            tmpSocket.waitForBytesWritten(500);
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // РЕЖИМ 2: Личное сообщение конкретному дачнику (Иван <-> Пётр)
     QString targetIp = "";
 
     for (int i = 1; i < m_users.size(); ++i) {
         if (m_users[i].name == targetPeer && m_users[i].isAlive) {
-            if (!m_users[i].ip2.isEmpty() && !me.ip2.isEmpty()) targetIp = m_users[i].ip2;
+            // Строгий приоритет выбора сети: LAN (ip0) -> AP (ip1) -> Direct (ip2)
+            if (!m_users[i].ip0.isEmpty() && !me.ip0.isEmpty()) targetIp = m_users[i].ip0;
             else if (!m_users[i].ip1.isEmpty() && !me.ip1.isEmpty()) targetIp = m_users[i].ip1;
-            else targetIp = m_users[i].ip0;
+            else if (!m_users[i].ip2.isEmpty() && !me.ip2.isEmpty()) targetIp = m_users[i].ip2;
             break;
         }
     }
 
+    // Отправляем пакет по выбранному IP адресу
     if (!targetIp.isEmpty()) {
-        QJsonObject obj; obj["type"] = "message"; obj["name"] = me.name; obj["text"] = text;
-        QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-
-        if (!me.ip2.isEmpty() && targetIp.startsWith("192.168.49.")) {
-            if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) tcpClientSocket->write(data);
-            else if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) tcpSocket->write(data);
-        } else {
-            QTcpSocket tmpSocket;
-            tmpSocket.connectToHost(targetIp, PORT);
-            if (tmpSocket.waitForConnected(1000)) {
-                tmpSocket.write(data);
-                tmpSocket.waitForBytesWritten(1000);
-                tmpSocket.disconnectFromHost();
+        // Если это Wi-Fi Direct, проверяем фоновые сокеты для ускорения
+        if (targetIp.startsWith("192.168.49.")) {
+            if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
+                tcpClientSocket->write(data);
+                return;
             }
+            if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
+                tcpSocket->write(data);
+                return;
+            }
+        }
+
+        // Универсальный быстрый TCP-выстрел для LAN/AP/Direct
+        QTcpSocket tmpSocket;
+        tmpSocket.connectToHost(targetIp, PORT);
+        if (tmpSocket.waitForConnected(1000)) {
+            tmpSocket.write(data);
+            tmpSocket.waitForBytesWritten(500);
         }
     }
 }
