@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 
 ApplicationWindow {
     id: window
@@ -13,95 +12,32 @@ ApplicationWindow {
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
 
-    property var textDropdownArray: []
-    property var audioDropdownLanArray: []
-    property var audioDropdownApArray: []
-    property var audioDropdownDirectArray: []
-
     ListModel {
         id: chatLogModel
-    }
-    signal requestLanCall(string peerName)
-    signal requestApCall(string peerName)
-    signal requestDirectCall(string peerName)
-
-    function updateDropdowns() {
-        var textTmp = []
-        var lanTmp = []
-        var apTmp = []
-        var directTmp = []
-        var myName = "Пользователь"
-
-        try {
-            var saved = netEngine.getSavedName()
-            if (saved && saved !== "") myName = saved
-        } catch(e) {}
-
-        var uniqueChatPeers = {}
-        var netTypes = [0, 1, 2]
-        var totalPeersCount = 0
-
-        for (var n = 0; n < netTypes.length; n++) {
-            var users = netEngine.getUsers(netTypes[n])
-            for (var u = 0; u < users.length; u++) {
-                if (users[u].name !== myName) {
-                    if (!uniqueChatPeers[users[u].name]) {
-                        uniqueChatPeers[users[u].name] = true
-                        totalPeersCount++
-                    }
-                }
-            }
-        }
-
-        for (var peer in uniqueChatPeers) {
-            if (peer !== window.activeChatPeer) {
-                textTmp.push(peer)
-            }
-        }
-
-        if (totalPeersCount > 1) {
-            textTmp.push("Все")
-        }
-
-        var lanUsers = netEngine.getUsers(0)
-        for (var i = 0; i < lanUsers.length; i++) {
-            if (lanUsers[i].name !== myName && window.activeConferencePeers.indexOf(lanUsers[i].name) === -1) lanTmp.push(lanUsers[i].name)
-        }
-
-        var apUsers = netEngine.getUsers(1)
-        for (var j = 0; j < apUsers.length; j++) {
-            if (apUsers[j].name !== myName && window.activeConferencePeers.indexOf(apUsers[j].name) === -1) apTmp.push(apUsers[j].name)
-        }
-
-        var directUsers = netEngine.getUsers(2)
-        for (var k = 0; k < directUsers.length; k++) {
-            if (directUsers[k].name !== myName && window.activeConferencePeers.indexOf(directUsers[k].name) === -1) directTmp.push(directUsers[k].name)
-        }
-
-        if (window.activeChatPeer !== "") textTmp.push("❌ Выйти")
-
-        window.textDropdownArray = textTmp
-        window.audioDropdownLanArray = lanTmp
-        window.audioDropdownApArray = apTmp
-        window.audioDropdownDirectArray = directTmp
-    }
-    function executeAudioCall(peerName, netType) {
-        netEngine.startAudioCall(peerName, netType)
-    }
-
-    function makeCall(peerName, netType) {
-        netEngine.startAudioCall(peerName, netType)
-    }
-
-    function dropCall() {
-        netEngine.stopAudioCall()
     }
 
     Connections {
         target: netEngine
         function onPeerListChanged() {
-            window.updateDropdowns()
-
+            if (chatMenu.opened) {
+                while (chatMenu.count > 0) {
+                    var item = chatMenu.takeItem(0)
+                    if (item) item.destroy()
+                }
+                var list = netEngine.getUsers(-1 | 0)
+                for (var i = 0; i < list.length; ++i) {
+                    var currentName = list[i]
+                    var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', chatMenu)
+                    if (menuItem) {
+                        chatMenu.addItem(menuItem)
+                        menuItem.triggered.connect((function(name) {
+                            return function() {
+                                window.activeChatPeer = name
+                            }
+                        })(currentName))
+                    }
+                }
+            }
         }
         function onMessageReceived(fromIp, message) {
             var currentTime = new Date().toLocaleTimeString(Qt.locale(), "hh:mm")
@@ -122,21 +58,15 @@ ApplicationWindow {
         }
         function onCallAccepted() {
             statusText.text = "Разговор"
-            window.updateDropdowns()
         }
         function onCallStopped() {
+            incomingCallDialog.close()
             callLanMenu.close()
             callApMenu.close()
             callDirectMenu.close()
             window.activeConferencePeers = ""
             window.activeCallNetType = -1
             statusText.text = "Ждём"
-            window.updateDropdowns()
-        }
-        Component.onCompleted: {
-            window.requestLanCall.connect(function(name) { netEngine.startAudioCall(name, 0) })
-            window.requestApCall.connect(function(name) { netEngine.startAudioCall(name, 1) })
-            window.requestDirectCall.connect(function(name) { netEngine.startAudioCall(name, 2) })
         }
     }
 
@@ -171,41 +101,32 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    onClicked: chatMenu.open()
+                    onClicked: {
+                        while (chatMenu.count > 0) {
+                            var item = chatMenu.takeItem(0)
+                            if (item) item.destroy()
+                        }
+                        var users = netEngine.getUsers(-1 | 0)
+                        for (var i = 0; i < users.length; ++i) {
+                            var currentName = users[i]
+                            var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', chatMenu)
+                            if (menuItem) {
+                                chatMenu.addItem(menuItem)
+                                menuItem.triggered.connect((function(name) {
+                                    return function() {
+                                        window.activeChatPeer = name
+                                    }
+                                })(currentName))
+                            }
+                        }
+                        chatMenu.open()
+                    }
 
                     Menu {
                         id: chatMenu
                         title: "Чат с..."
-                        Instantiator {
-                            model: window.textDropdownArray
-                            onObjectAdded: (index, object) => chatMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => chatMenu.removeItem(object)
-                            delegate: Column {
-                                width: parent ? parent.width : 0
-
-                                MenuSeparator {
-                                    width: parent.width
-                                    visible: modelData === "Все" || modelData === "❌ Выйти"
-                                }
-
-                                MenuItem {
-                                    width: parent.width
-                                    text: modelData
-                                    onTriggered: {
-                                        var choice = modelData
-                                        chatMenu.close()
-                                        if (choice === "❌ Выйти") {
-                                            window.activeChatPeer = ""
-                                        } else {
-                                            window.activeChatPeer = choice
-                                        }
-                                        window.updateDropdowns()
-                                    }
-                                }
-                            }
-                        }
                     }
-                 }
+                }
 
                 Button {
                     id: settingsButton
@@ -238,9 +159,7 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    onClicked: {
-                        netEngine.debugUsers()
-                    }
+                    onClicked: netEngine.debugUsers()
                 }
 
                 Rectangle {
@@ -262,6 +181,7 @@ ApplicationWindow {
                     }
                 }
             }
+
             Row {
                 width: parent.width
                 height: 50
@@ -285,6 +205,28 @@ ApplicationWindow {
                         if (window.activeCallNetType === 0) {
                             netEngine.stopAudioCall()
                         } else {
+                            while (callLanMenu.count > 0) {
+                                var item = callLanMenu.takeItem(0)
+                                if (item) item.destroy()
+                            }
+                            var users = netEngine.getUsers(0 | 0)
+                            for (var i = 0; i < users.length; ++i) {
+                                var currentName = users[i]
+
+                                // Динамически создаем настоящий объект MenuItem из строки
+                                var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', callLanMenu)
+
+                                if (menuItem) {
+                                    callLanMenu.addItem(menuItem) // Теперь аргументы на 100% совместимы!
+                                    menuItem.triggered.connect((function(name) {
+                                        return function() {
+                                            window.activeConferencePeers = name
+                                            window.activeCallNetType = 0
+                                            netEngine.startAudioCall(name, 0 | 0)
+                                        }
+                                    })(currentName))
+                                }
+                            }
                             callLanMenu.open()
                         }
                     }
@@ -292,23 +234,6 @@ ApplicationWindow {
                     Menu {
                         id: callLanMenu
                         title: "LAN Вызов..."
-                        Instantiator {
-                            model: window.audioDropdownLanArray
-                            onObjectAdded: (index, object) => callLanMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => callLanMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: modelData
-                                onTriggered: {
-                                    var name = modelData
-                                    var engineLink = netEngine
-                                    callLanMenu.close()
-                                    window.activeConferencePeers = name
-                                    window.activeCallNetType = 0
-                                    window.updateDropdowns()
-                                    engineLink.startAudioCall(name, 0)
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -330,6 +255,27 @@ ApplicationWindow {
                         if (window.activeCallNetType === 1) {
                             netEngine.stopAudioCall()
                         } else {
+                            while (callApMenu.count > 0) {
+                                var item = callApMenu.takeItem(0)
+                                if (item) item.destroy()
+                            }
+                            var users = netEngine.getUsers(1 | 0)
+                            for (var i = 0; i < users.length; ++i) {
+                                var currentName = users[i]
+
+                                var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', callApMenu)
+
+                                if (menuItem) {
+                                    callApMenu.addItem(menuItem)
+                                    menuItem.triggered.connect((function(name) {
+                                        return function() {
+                                            window.activeConferencePeers = name
+                                            window.activeCallNetType = 1
+                                            netEngine.startAudioCall(name, 1 | 0)
+                                        }
+                                    })(currentName))
+                                }
+                            }
                             callApMenu.open()
                         }
                     }
@@ -337,23 +283,6 @@ ApplicationWindow {
                     Menu {
                         id: callApMenu
                         title: "AP Вызов..."
-                        Instantiator {
-                            model: window.audioDropdownApArray
-                            onObjectAdded: (index, object) => callApMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => callApMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: modelData
-                                onTriggered: {
-                                    var name = modelData
-                                    var engineLink = netEngine
-                                    callApMenu.close()
-                                    window.activeConferencePeers = name
-                                    window.activeCallNetType = 1
-                                    window.updateDropdowns()
-                                    engineLink.startAudioCall(name, 1)
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -375,6 +304,27 @@ ApplicationWindow {
                         if (window.activeCallNetType === 2) {
                             netEngine.stopAudioCall()
                         } else {
+                            while (callDirectMenu.count > 0) {
+                                var item = callDirectMenu.takeItem(0)
+                                if (item) item.destroy()
+                            }
+                            var users = netEngine.getUsers(2 | 0)
+                            for (var i = 0; i < users.length; ++i) {
+                                var currentName = users[i]
+
+                                var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', callDirectMenu)
+
+                                if (menuItem) {
+                                    callDirectMenu.addItem(menuItem)
+                                    menuItem.triggered.connect((function(name) {
+                                        return function() {
+                                            window.activeConferencePeers = name
+                                            window.activeCallNetType = 2
+                                            netEngine.startAudioCall(name, 2 | 0)
+                                        }
+                                    })(currentName))
+                                }
+                            }
                             callDirectMenu.open()
                         }
                     }
@@ -382,23 +332,6 @@ ApplicationWindow {
                     Menu {
                         id: callDirectMenu
                         title: "Direct Вызов..."
-                        Instantiator {
-                            model: window.audioDropdownDirectArray
-                            onObjectAdded: (index, object) => callDirectMenu.insertItem(index, object)
-                            onObjectRemoved: (index, object) => callDirectMenu.removeItem(object)
-                            delegate: MenuItem {
-                                text: modelData
-                                onTriggered: {
-                                    var name = modelData
-                                    var engineLink = netEngine
-                                    callDirectMenu.close()
-                                    window.activeConferencePeers = name
-                                    window.activeCallNetType = 2
-                                    window.updateDropdowns()
-                                    engineLink.startAudioCall(name, 2)
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -433,7 +366,6 @@ ApplicationWindow {
             }
         }
     }
-
     ListView {
         id: chatListView
         width: parent.width
@@ -571,7 +503,6 @@ ApplicationWindow {
                         incomingCallDialog.close()
                         window.activeConferencePeers = incomingCallDialog.callerName
                         window.activeCallNetType = incomingCallDialog.callNetType
-                        window.updateDropdowns()
                         netEngine.acceptAudioCall(incomingCallDialog.callerName, incomingCallDialog.callNetType)
                     }
                 }
@@ -618,7 +549,6 @@ ApplicationWindow {
                 onClicked: {
                     if (settingsNameInput.text.trim() !== "") {
                         netEngine.saveNameToFile(settingsNameInput.text)
-                        window.updateDropdowns()
                     }
                     settingsDialog.close()
                 }

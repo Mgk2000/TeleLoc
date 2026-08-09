@@ -2,17 +2,13 @@
 #define NETWORKENGINE_H
 
 #include <QObject>
-#include <QUdpSocket>
-#include <QTcpServer>
+#include <QString>
+#include <QVector>
 #include <QTcpSocket>
-#include <QTimer>
-#include <QDateTime>
-#include <QHostAddress>
-#include <QList>
-#include <QVariantList>
-#include <QJsonObject>
-#include <QJsonDocument>
-#include <QStringList>
+#include <QTcpServer>
+#include <QUdpSocket>
+#include <QSoundEffect>
+#include <QUrl>
 #include "audioengine.h"
 
 struct UserInfo {
@@ -20,64 +16,59 @@ struct UserInfo {
     QString ip0;
     QString ip1;
     QString ip2;
-    QDateTime lastSeen;
     bool isAlive;
 };
 
 class NetworkEngine : public QObject
 {
     Q_OBJECT
-
 public:
     explicit NetworkEngine(QObject *parent = nullptr);
     ~NetworkEngine();
 
-    Q_INVOKABLE QVariantList getUsers(int netType) const;
-    Q_INVOKABLE bool isNetTypeAvailable(int netType) const;
-
-    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
+    Q_INVOKABLE bool isNetTypeAvailable(int netType);
     Q_INVOKABLE void startAudioCall(const QString &targetPeerName, int netType);
     Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName, int netType);
     Q_INVOKABLE void stopAudioCall();
-
-    Q_INVOKABLE QString getSavedName() const;
+    Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE void saveNameToFile(const QString &name);
-    Q_INVOKABLE bool isRegistered() const { return true; }
-    Q_INVOKABLE void debugUsers() const;
+    Q_INVOKABLE QStringList getUsers(int netType);
+    Q_INVOKABLE void debugUsers();
+    Q_INVOKABLE QString getSavedName();
 
 signals:
     void peerListChanged();
-    void messageReceived(QString fromIp, QString text);
-    void incomingCall(QString peerName, int netType);
+    void messageReceived(const QString &fromIp, const QString &message);
+    void incomingCall(const QString &peerName, int netType);
     void callAccepted();
     void callStopped();
 
 private slots:
-    void sendDiscovery();
-    void readPendingDatagrams();
     void onNewConnection();
     void onReadyTcpRead();
+    void onReadyUdpRead();
+    void sendDiscovery();
+    void updateInterfaces();
 
 private:
-    void readConfig();
-    void updateInterfaces();
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
+    void readConfig();
 
-    QUdpSocket *udpSocket;
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;
     QTcpSocket *tcpClientSocket;
-
-    QTimer *discoveryTimer;
-    QTimer *interfaceTimer;
+    QUdpSocket *udpSocket;
     AudioEngine *audioEngine;
 
-    QList<UserInfo> m_users;
+    QVector<UserInfo> m_users;
     QString m_activePeerIp;
     int m_activeCallNetType;
+    const int PORT = 28000;
 
-    const quint16 PORT = 45455;
-    const QString SERVER_IP = "192.168.49.1";
+    QSoundEffect *m_ringbackTone;
+    QSoundEffect *m_busyTone;
+    QSoundEffect *m_incomingRing;
+    bool m_isCallActive;
 };
 
-#endif
+#endif // NETWORKENGINE_H

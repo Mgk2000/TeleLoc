@@ -36,12 +36,12 @@ endif()
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0
-    RESOURCE_PREFIX "/qt/qml/"
-    QML_FILES
-        Main.qml
+     RESOURCE_PREFIX "/qt/qml"
+    QML_FILES Main.qml
     RESOURCES
-        ring1.wav
-        ring2.wav
+        ringback.wav
+        busy.wav
+        ringtone.wav
 )
 
 # Линковка библиотек
