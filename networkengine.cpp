@@ -7,6 +7,7 @@
 #include <QTextStream>
 #include <QDir>
 #include <QTimer>
+#include <QCoreApplication>
 #include <QDebug>
 
 NetworkEngine::NetworkEngine(QObject *parent)
@@ -35,6 +36,8 @@ NetworkEngine::NetworkEngine(QObject *parent)
 
     tcpServer = new QTcpServer(this);
     connect(tcpServer, &QTcpServer::newConnection, this, &NetworkEngine::onNewConnection);
+
+    // C++ ядро слушает свой порт 28000 на всех платформах
     tcpServer->listen(QHostAddress::Any, PORT);
 
     tcpSocket = new QTcpSocket(this);
@@ -60,6 +63,12 @@ NetworkEngine::~NetworkEngine() {
     }
 }
 
+void NetworkEngine::handleVoipWakeup(const QString &callerName) {
+    emit messageReceived("СИСТЕМА", "Приложение разбужено Java-интентом! Вызов от: " + callerName);
+    m_incomingRing->play();
+    emit incomingCall(callerName, 0);
+}
+
 bool NetworkEngine::isNetTypeAvailable(int netType) {
     if (m_users.isEmpty()) return false;
     UserInfo me = m_users.at(0);
@@ -71,7 +80,6 @@ bool NetworkEngine::isNetTypeAvailable(int netType) {
 
 QStringList NetworkEngine::getUsers(int netType) {
     QStringList list;
-
     if (netType == -1) {
         int peersCount = 0;
         for (int i = 1; i < m_users.size(); ++i) {
@@ -87,23 +95,15 @@ QStringList NetworkEngine::getUsers(int netType) {
         }
         return list;
     }
-
     for (int i = 1; i < m_users.size(); ++i) {
         if (m_users[i].isAlive) {
-            if (netType == 0 && !m_users[i].ip0.isEmpty()) {
-                list.append(m_users[i].name);
-            }
-            else if (netType == 1 && !m_users[i].ip1.isEmpty()) {
-                list.append(m_users[i].name);
-            }
-            else if (netType == 2 && !m_users[i].ip2.isEmpty()) {
-                list.append(m_users[i].name);
-            }
+            if (netType == 0 && !m_users[i].ip0.isEmpty()) list.append(m_users[i].name);
+            else if (netType == 1 && !m_users[i].ip1.isEmpty()) list.append(m_users[i].name);
+            else if (netType == 2 && !m_users[i].ip2.isEmpty()) list.append(m_users[i].name);
         }
     }
     return list;
 }
-
 void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr) {
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull()) return;
@@ -141,6 +141,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         else if (currentNetType == 1) m_users[peerIndex].ip1 = senderIpStr;
         else if (currentNetType == 2) m_users[peerIndex].ip2 = senderIpStr;
     }
+
     if (type == "incoming_call") {
         int netType = obj["net_type"].toInt();
         if (m_isCallActive) {
@@ -163,7 +164,15 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     else if (type == "accept_call") {
         m_ringbackTone->stop();
         m_isCallActive = true;
-        audioEngine->startRecording();
+        for (int i = 1; i < m_users.size(); ++i) {
+            if (m_users[i].name == name && m_users[i].isAlive) {
+                if (m_activeCallNetType == 0) m_activePeerIp = m_users[i].ip0;
+                else if (m_activeCallNetType == 1) m_activePeerIp = m_users[i].ip1;
+                else if (m_activeCallNetType == 2) m_activePeerIp = m_users[i].ip2;
+                break;
+            }
+        }
+        audioEngine->startRecording(m_activePeerIp);
         emit callAccepted();
     }
     else if (type == "line_busy") {
@@ -190,7 +199,6 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         emit peerListChanged();
     }
 }
-
 void NetworkEngine::startAudioCall(const QString &targetPeerName, int netType) {
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
@@ -203,34 +211,50 @@ void NetworkEngine::startAudioCall(const QString &targetPeerName, int netType) {
             break;
         }
     }
+
+    if (targetIp.startsWith("::ffff:")) {
+        targetIp.remove("::ffff:");
+    }
+
     if (!targetIp.isEmpty()) {
         m_activePeerIp = targetIp;
         m_activeCallNetType = netType;
+
         QJsonObject obj;
         obj["type"] = "incoming_call";
         obj["name"] = me.name;
         obj["net_type"] = netType;
-        QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-        if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
-            tcpClientSocket->write(data);
-        } else {
-            if (tcpSocket->state() != QAbstractSocket::ConnectedState || tcpSocket->peerAddress().toString() != targetIp) {
-                tcpSocket->abort();
-                tcpSocket->connectToHost(targetIp, PORT);
-                if (tcpSocket->waitForConnected(1000)) {
-                    tcpSocket->write(data);
-                }
-            } else {
-                tcpSocket->write(data);
-            }
+
+        // КРИТИЧЕСКИ ВАЖНО: Добавляем \n для Java-парсерa Ивана!
+        QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
+
+        emit messageReceived("СИСТЕМА", "ВЫСТРЕЛ ВЫЗОВА ДЛЯ " + targetPeerName + " НА IP: " + targetIp);
+
+        // ВЫСТРЕЛ 1: Десктопный C++ порт 28000
+        QTcpSocket socket28000;
+        socket28000.connectToHost(targetIp, PORT); // PORT = 28000
+        if (socket28000.waitForConnected(300)) {
+            socket28000.write(data);
+            socket28000.waitForBytesWritten(300);
+            socket28000.disconnectFromHost();
         }
+
+        // ВЫСТРЕЛ 2: Направляем короткий TCP прямо в работающий Java-будильник Ивана (28500)
+        QTcpSocket socket28500;
+        socket28500.connectToHost(targetIp, 28500);
+        if (socket28500.waitForConnected(300)) {
+            socket28500.write(data);
+            socket28500.waitForBytesWritten(300);
+            socket28500.disconnectFromHost(); // Закрываем сразу, как в чате!
+            emit messageReceived("СИСТЕМА", "Доставлено на Java-порт 28500");
+        }
+
         m_ringbackTone->play();
+    } else {
+        emit messageReceived("СИСТЕМА", "ОШИБКА: НЕ НАЙДЕН IP");
     }
 }
-
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) {
-    Q_UNUSED(targetPeerName);
-    Q_UNUSED(netType);
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
     m_incomingRing->stop();
@@ -239,12 +263,33 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     obj["type"] = "accept_call";
     obj["name"] = me.name;
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-    if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
-        tcpClientSocket->write(data);
-    } else {
-        tcpSocket->write(data);
+
+    QString targetIp = "";
+    for (int i = 1; i < m_users.size(); ++i) {
+        if (m_users[i].name == targetPeerName && m_users[i].isAlive) {
+            if (netType == 0) targetIp = m_users[i].ip0;
+            else if (netType == 1) targetIp = m_users[i].ip1;
+            else if (netType == 2) targetIp = m_users[i].ip2;
+            break;
+        }
     }
-    audioEngine->startRecording();
+
+    if (targetIp.startsWith("::ffff:")) {
+        targetIp.remove("::ffff:");
+    }
+
+    if (!targetIp.isEmpty()) {
+        m_activePeerIp = targetIp;
+        m_activeCallNetType = netType;
+        tcpSocket->abort();
+        tcpSocket->connectToHost(targetIp, PORT);
+        if (tcpSocket->waitForConnected(1200)) {
+            tcpSocket->write(data);
+            tcpSocket->waitForBytesWritten(500);
+        }
+    }
+
+    audioEngine->startRecording(m_activePeerIp);
 }
 
 void NetworkEngine::stopAudioCall() {
@@ -254,12 +299,21 @@ void NetworkEngine::stopAudioCall() {
     obj["type"] = "stop_call";
     obj["name"] = me.name;
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-    if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
-        tcpClientSocket->write(data);
+
+    QString targetIp = m_activePeerIp;
+    if (targetIp.startsWith("::ffff:")) {
+        targetIp.remove("::ffff:");
     }
-    if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
-        tcpSocket->write(data);
+
+    if (!targetIp.isEmpty() && tcpSocket) {
+        tcpSocket->abort();
+        tcpSocket->connectToHost(targetIp, PORT);
+        if (tcpSocket->waitForConnected(500)) {
+            tcpSocket->write(data);
+            tcpSocket->waitForBytesWritten(500);
+        }
     }
+
     m_ringbackTone->stop();
     m_incomingRing->stop();
     m_busyTone->stop();
@@ -313,16 +367,6 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
         }
     }
     if (!targetIp.isEmpty()) {
-        if (targetIp.startsWith("192.168.49.")) {
-            if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
-                tcpClientSocket->write(data);
-                return;
-            }
-            if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
-                tcpSocket->write(data);
-                return;
-            }
-        }
         QTcpSocket tmpSocket;
         tmpSocket.connectToHost(targetIp, PORT);
         if (tmpSocket.waitForConnected(1000)) {
@@ -358,7 +402,7 @@ void NetworkEngine::updateInterfaces() {
             else m_users[0].ip0 = ip;
         }
     }
-    readConfig();
+    m_users[0].name = getSavedName();
 }
 
 void NetworkEngine::readConfig() {
@@ -369,21 +413,28 @@ void NetworkEngine::readConfig() {
         file.close();
     }
 }
+
 QString NetworkEngine::getSavedName() {
     if (!m_users.isEmpty()) {
         return m_users[0].name;
     }
     return "Пользователь";
 }
+
 void NetworkEngine::saveNameToFile(const QString &name) {
-    if (m_users.isEmpty()) return;
-    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
-    QFile file(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf");
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&file); out << name.trimmed(); file.close();
+    QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(path);
+    QFile file(path + "/teleloc.conf");
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(name.trimmed().toUtf8());
+        file.close();
+    }
+    if (!m_users.isEmpty()) {
         m_users[0].name = name.trimmed();
+        emit peerListChanged();
     }
 }
+
 void NetworkEngine::onNewConnection() {
     if (tcpClientSocket) {
         tcpClientSocket->disconnectFromHost();
@@ -412,4 +463,6 @@ void NetworkEngine::onReadyUdpRead() {
 
 void NetworkEngine::debugUsers() {
     for (int i = 0; i < m_users.size(); ++i) {
-qDebug() << "User:" << m_users[i].name << "LAN:" << m_users[i].ip0 << "AP:" << m_users[i].ip1 << "Direct:" << m_users[i].ip2 << "Alive:" << m_users[i].isAlive;}}
+        qDebug() << "User:" << m_users[i].name << "LAN:" << m_users[i].ip0 << "AP:" << m_users[i].ip1 << "Direct:" << m_users[i].ip2 << "Alive:" << m_users[i].isAlive;
+    }
+}

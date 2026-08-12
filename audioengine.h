@@ -2,13 +2,13 @@
 #define AUDIOENGINE_H
 
 #include <QObject>
-#include <QByteArray>
+#include <QAudioFormat>
 #include <QAudioSource>
 #include <QAudioSink>
-#include <QAudioFormat>
-#include <QMediaDevices>
-#include <QAudioDevice>
 #include <QIODevice>
+#include <QTcpSocket>
+#include <QTcpServer>
+#include <QTimer>
 
 class AudioEngine : public QObject
 {
@@ -17,23 +17,28 @@ public:
     explicit AudioEngine(QObject *parent = nullptr);
     ~AudioEngine();
 
-    void startRecording();
-    void playFrame(const QByteArray &frame);
+    void startRecording(const QString &targetIp);
     void stop();
 
-signals:
-    void frameReady(const QByteArray &frame);
-
 private slots:
-    void handleInputReady();
+    void onNewConnection();
+    void onReadyRead();
 
 private:
-    QAudioSource *m_audioSource = nullptr;
-    QAudioSink *m_audioSink = nullptr;
-    QIODevice *m_inputDevice = nullptr;
-    QIODevice *m_outputDevice = nullptr;
     QAudioFormat m_format;
-    QByteArray m_playbackBuffer;
+    QAudioSource *m_audioSource;
+    QAudioSink *m_audioSink;
+    QIODevice *m_inputDevice;
+    QIODevice *m_outputDevice;
+    QTcpServer *m_tcpAudioServer;
+    QTcpSocket *m_tcpAudioSocket;
+    QTcpSocket *m_tcpAudioClient;
+    const int AUDIO_PORT = 28001;
+    QTimer* volumeTimer;
+signals:
+    void micVolumeChanged(int volume);
+    void netVolumeChanged(int volume);
+
 };
 
 #endif // AUDIOENGINE_H

@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QTcpSocket>
 #include <QTcpServer>
@@ -31,10 +32,12 @@ public:
     Q_INVOKABLE void acceptAudioCall(const QString &targetPeerName, int netType);
     Q_INVOKABLE void stopAudioCall();
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
+    Q_INVOKABLE QString getSavedName();
     Q_INVOKABLE void saveNameToFile(const QString &name);
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
-    Q_INVOKABLE QString getSavedName();
+    void handleVoipWakeup(const QString &callerName);
+    void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
 
 signals:
     void peerListChanged();
@@ -42,6 +45,8 @@ signals:
     void incomingCall(const QString &peerName, int netType);
     void callAccepted();
     void callStopped();
+    void micVolumeUpdated(int volume);
+    void netVolumeUpdated(int volume);
 
 private slots:
     void onNewConnection();
@@ -51,7 +56,6 @@ private slots:
     void updateInterfaces();
 
 private:
-    void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
     void readConfig();
 
     QTcpServer *tcpServer;
@@ -69,6 +73,7 @@ private:
     QSoundEffect *m_busyTone;
     QSoundEffect *m_incomingRing;
     bool m_isCallActive;
+
 };
 
 #endif // NETWORKENGINE_H

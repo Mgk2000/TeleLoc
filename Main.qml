@@ -4,6 +4,8 @@ import QtQuick.Controls
 ApplicationWindow {
     id: window
     visible: true
+    visibility: Qt.platform.os === "windows" ? Window.Windowed : Window.FullScreen
+
     width: 360
     height: 640
     title: "TeleLoc Рация"
@@ -60,6 +62,8 @@ ApplicationWindow {
             statusText.text = "Разговор"
         }
         function onCallStopped() {
+            micIndicatorText.text = "🎤 0%"
+            netIndicatorText.text = "🔊 0%"
             incomingCallDialog.close()
             callLanMenu.close()
             callApMenu.close()
@@ -68,6 +72,12 @@ ApplicationWindow {
             window.activeCallNetType = -1
             statusText.text = "Ждём"
         }
+        function onMicVolumeUpdated(volume) {
+             micIndicatorText.text = "🎤 " + volume + "%"
+         }
+         function onNetVolumeUpdated(volume) {
+             netIndicatorText.text = "🔊 " + volume + "%"
+         }
     }
 
     Rectangle {
@@ -163,8 +173,8 @@ ApplicationWindow {
                 }
 
                 Rectangle {
-                    id: volumeIndicator
-                    width: parent.width - 174
+                    id: micVolumeIndicator
+                    width: (parent.width - 174) / 2
                     height: 50
                     color: "#34495e"
                     radius: 8
@@ -172,10 +182,29 @@ ApplicationWindow {
                     border.width: 1
 
                     Text {
-                        id: volumeIndicatorText
+                        id: micIndicatorText
                         text: "🎤 0%"
                         color: "white"
-                        font.pixelSize: 12
+                        font.pixelSize: 11
+                        font.bold: true
+                        anchors.centerIn: parent
+                    }
+                }
+
+                Rectangle {
+                    id: netVolumeIndicator
+                    width: (parent.width - 174) / 2
+                    height: 50
+                    color: "#34495e"
+                    radius: 8
+                    border.color: "#bdc3c7"
+                    border.width: 1
+
+                    Text {
+                        id: netIndicatorText
+                        text: "🔊 0%"
+                        color: "white"
+                        font.pixelSize: 11
                         font.bold: true
                         anchors.centerIn: parent
                     }
@@ -398,13 +427,16 @@ ApplicationWindow {
                         color: "#7f8c8d"
                     }
 
-                    Text {
+                    TextEdit {
                         id: chatText
                         text: model.text
                         width: parent.width
                         wrapMode: Text.Wrap
                         font.pixelSize: 14
-                        color: "#2c3e50"
+                        color: "#ff3e50"
+                        selectByMouse: true
+                        //mouseSelectionMode: Text.SelectCharacters
+                        persistentSelection: true // выделение не пропадёт при потере фокуса
                     }
 
                     Text {
