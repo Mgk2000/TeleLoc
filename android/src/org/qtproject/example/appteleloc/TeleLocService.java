@@ -91,15 +91,14 @@ public class TeleLocService extends Service {
             @Override
             public void run() {
                 try {
-                    // Короткий, чистый TCP-сервер будильника на порту 28500
                     m_serverSocket = new ServerSocket(28500);
                     Log.d(TAG, "Java TCP-будильник запущен на порту 28500");
 
                     while (m_isRunning) {
                         Socket clientSocket = m_serverSocket.accept();
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
+                        String remoteIp = clientSocket.getInetAddress().getHostAddress();
                         
-                        // Читаем одну строку до символа \n и мгновенно отпускаем сетевую плату девайса
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
                         String rawData = reader.readLine();
                         clientSocket.close();
 
@@ -110,7 +109,8 @@ public class TeleLocService extends Service {
                                 String callerName = obj.optString("name");
 
                                 if ("incoming_call".equals(type)) {
-                                    triggerFullScreenCall(callerName);
+                                    // ИСПРАВЛЕНО: Передаем ОБА параметра (Имя и IP)
+                                    triggerFullScreenCall(callerName, remoteIp);
                                 }
                             } catch (Exception e) {
                                 Log.e(TAG, "Ошибка парсинга: " + e.getMessage());
@@ -124,49 +124,71 @@ public class TeleLocService extends Service {
         }).start();
     }
 
-    private void triggerFullScreenCall(String callerName) {
-        // Аппаратно зажигаем дисплей смартфона на максимальную яркость на 8 секунд
+     private void triggerFullScreenCall(String callerName, String callerIp) {
+        // 1. Аппаратно зажигаем дисплей смартфона
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 android.os.PowerManager.WakeLock wl = pm.newWakeLock(
                     android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK | android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "TeleLoc::Wake");
-                wl.acquire(8000);
+                wl.acquire(10000);
             }
         } catch (Exception e) {
             Log.e(TAG, "Ошибка экрана: " + e.getMessage());
         }
 
-        // Включаем физический вибромотор смартфона на 500 мс
+        // 2. Включаем физический вибромотор
         try {
             android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             if (v != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    v.vibrate(android.os.VibrationEffect.createOneShot(500, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                    v.vibrate(android.os.VibrationEffect.createOneShot(600, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
                 } else {
-                    v.vibrate(500);
+                    v.vibrate(600);
                 }
             }
         } catch (Exception e) {
             Log.e(TAG, "Ошибка вибратора: " + e.getMessage());
         }
 
-        // Формируем Intent на запуск нашего главного QML/C++ окна QtActivity
+        // 3. Формируем Intent на запуск нашего главного QML/C++ окна QtActivity
         Intent callIntent = new Intent();
         callIntent.setClassName(this, "org.qtproject.qt.android.QtActivity");
         callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK 
                           | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT 
                           | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                          
         callIntent.putExtra("caller_name", callerName);
+        callIntent.putExtra("caller_ip", callerIp); 
+
+        try {
+            // СНАЧАЛА принудительно поднимаем весь таск приложения на передний план ОС, 
+            // если оно уже свернуто в списке запущенных!
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                java.util.List<android.app.ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(10);
+                for (android.app.ActivityManager.RunningTaskInfo task : tasks) {
+                    if (task.baseActivity != null && task.baseActivity.getPackageName().equals(getPackageName())) {
+                        // Поднимаем существующее окно рации из фона на самый верх экрана
+                        am.moveTaskToFront(task.id, android.app.ActivityManager.MOVE_TASK_WITH_HOME);
+                        break;
+                    }
+                }
+            }
+            
+            // Затем дублируем запуск интента
+            startActivity(callIntent);
+            Log.d(TAG, "Java форсированно подняла задачу QtActivity на передний план");
+        } catch (Exception e) {
+            Log.e(TAG, "Ошибка подъема окна: " + e.getMessage());
+        }
 
         int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
             ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE 
             : PendingIntent.FLAG_UPDATE_CURRENT;
 
-        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-            this, 0, callIntent, pendingFlags);
+        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
 
-        // Обновляем плашку уведомления, пихая туда CallStyle-контракт
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
             Notification notification = createVoipNotification("Входящий вызов от " + callerName, fullScreenPendingIntent);

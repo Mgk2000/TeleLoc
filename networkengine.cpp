@@ -453,7 +453,7 @@ void NetworkEngine::onReadyTcpRead() {
 
 void NetworkEngine::onReadyUdpRead() {
     while (udpSocket->hasPendingDatagrams()) {
-        QByteArray datagram;
+            QByteArray datagram;
         datagram.resize(udpSocket->pendingDatagramSize());
         QHostAddress senderHost;
         udpSocket->readDatagram(datagram.data(), datagram.size(), &senderHost);
