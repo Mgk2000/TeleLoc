@@ -23,29 +23,13 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
-#ifdef Q_OS_ANDROID
     QString incomingCallerName = "";
+
+#ifdef Q_OS_ANDROID
     QJniObject context = QJniObject::callStaticObjectMethod(
         "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
 
     if (context.isValid()) {
-        // БЛОК 0: Железобетонный и безопасный запуск Java-службы в Qt 6
-        // 1. Получаем объект java.lang.Class для нашей службы через Class.forName()
-        QJniObject classNameStr = QJniObject::fromString("org.qtproject.example.appteleloc.TeleLocService");
-        QJniObject serviceClass = QJniObject::callStaticObjectMethod(
-            "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", classNameStr.object());
-
-        if (serviceClass.isValid()) {
-            // 2. Создаем Intent, передавая Context Activity и объект Class
-            QJniObject intent("android/content/Intent", "(Landroid/content/Context;Ljava/lang/Class;)V",
-                              context.object(), serviceClass.object());
-
-            if (intent.isValid()) {
-                // 3. Запускаем Foreground службу в фоне
-                context.callObjectMethod("startForegroundService", "(android/content/Intent;)Landroid/content/ComponentName;", intent.object());
-            }
-        }
-
         // БЛОК 1: Настройка WakeLock (Процессор не засыпает)
         QJniObject serviceName = QJniObject::getStaticObjectField(
             "android/content/Context", "POWER_SERVICE", "Ljava/lang/String;");
@@ -60,7 +44,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        // БЛОК 2: Активация флагов вывода окна поверх экрана блокировки
+        // БЛОК 2: Активация флагов вывода окна поверх экрана блокировки на UI-потоке Android
         QNativeInterface::QAndroidApplication::runOnAndroidMainThread([context]() {
             QJniObject windowObj = context.callObjectMethod("getWindow", "()Landroid/view/Window;");
             if (windowObj.isValid()) {
@@ -69,12 +53,12 @@ int main(int argc, char *argv[])
             }
         });
 
-        // БЛОК 3: Достаем интент (вызов из фона)
+        // БЛОК 3: Достаем интент и вытаскиваем имя звонящего
         QJniObject intentObj = context.callObjectMethod("getIntent", "()Landroid/content/Intent;");
         if (intentObj.isValid()) {
-            jboolean hasExtra = intentObj.callMethod<jboolean>("hasExtra", "(Ljava/lang/String;)Z",
-                                                               QJniObject::fromString("caller_name").object());
-            if (hasExtra) {
+            jboolean hasName = intentObj.callMethod<jboolean>("hasExtra", "(Ljava/lang/String;)Z",
+                                                              QJniObject::fromString("caller_name").object());
+            if (hasName) {
                 QJniObject jCallerName = intentObj.callObjectMethod("getStringExtra",
                                                                     "(Ljava/lang/String;)Ljava/lang/String;",
                                                                     QJniObject::fromString("caller_name").object());
@@ -90,46 +74,40 @@ int main(int argc, char *argv[])
     NetworkEngine netEngine;
 
 #ifdef Q_OS_ANDROID
-    // Запускаем службу через 1 секунду после старта приложения
+    // Запускаем Java-службу через 1 секунду после старта приложения
     QTimer::singleShot(1000, []() {
         QJniObject context = QJniObject::callStaticObjectMethod(
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
 
         if (context.isValid()) {
-            // СТРОГОЕ СООТВЕТСТВИЕ: org.qtproject.example.appTeleLoc (с заглавными T и L!)
-            // СТРОГО В НИЖНЕМ РЕГИСТРЕ для рантайма Java в Qt 6!
             QJniObject classNameStr = QJniObject::fromString("org.qtproject.example.appteleloc.TeleLocService");
             QJniObject serviceClass = QJniObject::callStaticObjectMethod(
                 "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", classNameStr.object());
+
             if (serviceClass.isValid()) {
                 QJniObject intent("android/content/Intent", "(Landroid/content/Context;Ljava/lang/Class;)V",
                                   context.object(), serviceClass.object());
                 if (intent.isValid()) {
-                    // ИСПРАВЛЕНО: Строгая JNI-сигнатура со слэшами и точкой с запятой L...;
-                    QJniObject componentName = context.callObjectMethod(
+                    context.callObjectMethod(
                         "startForegroundService",
                         "(Landroid/content/Intent;)Landroid/content/ComponentName;",
                         intent.object()
                         );
-
-                    if (componentName.isValid()) {
-                        qDebug() << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ СЛУЖБА УСПЕШНО ЗАПУЩЕНА! ComponentName:" << componentName.toString();
-                    } else {
-                        qDebug() << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ СБОЙ: Вызов вернул NULL";
-                    }
-                }
-                else {
-                                    qDebug() << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@intent not Valid";
                 }
             }
-            else {
-                qDebug() << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@serviceClass.is not Valid";
-            }
-
         }
     });
+
+    // ИСПРАВЛЕНО: Строго один исходный аргумент, как требует заголовочный файл!
+    if (!incomingCallerName.isEmpty()) {
+        QTimer::singleShot(500, &netEngine, [&netEngine, incomingCallerName]() {
+            netEngine.handleVoipWakeup(incomingCallerName);
+        });
+    }
 #endif
+
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
+
     const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
         &app, [url](QObject *obj, const QUrl &objUrl) {

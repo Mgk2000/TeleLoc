@@ -51,7 +51,7 @@ public class TeleLocService extends Service {
         }
     }
 
-    private Notification createVoipNotification(String text, PendingIntent fullScreenIntent) {
+     private Notification createVoipNotification(String text, PendingIntent fullScreenIntent) {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O 
             ? new Notification.Builder(this, CHANNEL_ID) 
             : new Notification.Builder(this);
@@ -60,13 +60,13 @@ public class TeleLocService extends Service {
                .setContentText(text)
                .setSmallIcon(android.R.drawable.ic_menu_call)
                .setCategory(Notification.CATEGORY_CALL)
-               .setPriority(Notification.PRIORITY_HIGH)
-               .setOngoing(true);
+               .setPriority(Notification.PRIORITY_HIGH);
 
         if (fullScreenIntent != null) {
             builder.setFullScreenIntent(fullScreenIntent, true);
+            // ВКЛЮЧАЕМ АВТОМАТИЧЕСКОЕ ГАШЕНИЕ: Как только окно всплыло и активировалось, Android сам сотрет плашку!
+            builder.setAutoCancel(true); 
 
-            // СТРОГАЯ ОФИЦИАЛЬНАЯ VoIP-СПЕЦИФИКАЦИЯ ANDROID 14 ДЛЯ ПРОБИТИЯ СНА
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 Intent hangupIntent = new Intent(this, TeleLocService.class);
                 PendingIntent declinePendingIntent = PendingIntent.getService(this, 1, hangupIntent, PendingIntent.FLAG_IMMUTABLE);
@@ -76,10 +76,12 @@ public class TeleLocService extends Service {
                     .setImportant(true)
                     .build();
 
-                // Обертка в CallStyle заставляет ядро Android зажечь экран и вывести QML окно
                 builder.setStyle(Notification.CallStyle.forIncomingCall(
                     incomingCaller, declinePendingIntent, fullScreenIntent));
             }
+        } else {
+            // Этот флаг оставляем ТОЛЬКО для постоянной фоновой службы, чтобы её не убила ОС
+            builder.setOngoing(true);
         }
 
         return builder.build();
@@ -193,6 +195,24 @@ public class TeleLocService extends Service {
         if (manager != null) {
             Notification notification = createVoipNotification("Входящий вызов от " + callerName, fullScreenPendingIntent);
             manager.notify(1, notification);
+        // Фоновый поток-таймер для автоматического удаления плашки вызова через 15 секунд
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(15000); // Тайм-аут ожидания ответа: 15 секунд
+                    NotificationManager autoCancelManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                    if (autoCancelManager != null) {
+                        // Стираем конкретно всплывшую плашку вызова (ID = 1), не трогая саму фоновую службу
+                        autoCancelManager.cancel(1);
+                        Log.d(TAG, "Таймаут ожидания звонка истек. Системная плашка автоматически удалена.");
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "Таймер очистки прерван: " + e.getMessage());
+                }
+            }
+        }).start();
+
         }
     }
 
