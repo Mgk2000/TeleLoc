@@ -28,7 +28,6 @@ qt_add_executable(appTeleLoc
     audioengine.h
     audioengine.cpp
 )
-
 # Регистрация QML-модуля с жестким указанием единого пути ресурсов TeleLoc
 qt_add_qml_module(appTeleLoc
     URI TeleLoc

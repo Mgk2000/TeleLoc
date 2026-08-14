@@ -34,6 +34,8 @@ public:
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE QString getSavedName();
     Q_INVOKABLE void saveNameToFile(const QString &name);
+    Q_INVOKABLE void callSpecificIp(const QString &targetIp, int netType);
+
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
     void handleVoipWakeup(const QString &callerName);
@@ -57,7 +59,7 @@ private slots:
 
 private:
     void readConfig();
-
+    void savePeersToConfig();
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;
     QTcpSocket *tcpClientSocket;

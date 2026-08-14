@@ -1,4 +1,4 @@
-package org.qtproject.example.appteleloc;
+package org.qtproject.example.appTeleLoc;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -21,85 +21,133 @@ public class TeleLocService extends Service {
     private static final String CHANNEL_ID = "TeleLocVoipChannel";
     private ServerSocket m_serverSocket;
     private boolean m_isRunning = false;
-
+    private static final String CHANNEL_ID_SILENT = "TeleLocKeepAliveChannel";
+    private static final String CHANNEL_ID_VOIP = "TeleLocVoipChannel";
+    // СТАТИЧЕСКИЙ АВТОЗАПУСК: Поднимает службу из Java при создании окна Qt
     @Override
     public void onCreate() {
         super.onCreate();
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: onCreate() запущена");
         createNotificationChannel();
         startServerThread();
+        
+        // ХОТ-ФИКС ДЛЯ SAMSUNG И XIAOMI: Взводим вечный системный будильник-страж!
+        scheduleStickyAlarm();
+    }
+
+    // Метод, который регистрирует в недрах Android автономный перезапуск рации
+    private void scheduleStickyAlarm() {
+        try {
+            Context context = getApplicationContext();
+            Intent restartIntent = new Intent(context, TeleLocWakeReceiver.class);
+            restartIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
+                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE 
+                : PendingIntent.FLAG_UPDATE_CURRENT;
+
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(context, 0, restartIntent, flags);
+            android.app.AlarmManager alarm = (android.app.AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+
+            if (alarm != null) {
+                long triggerTime = System.currentTimeMillis() + 60000; // 60 секунд
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarm.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                } else {
+                    alarm.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                }
+                Log.d(TAG, "@@@ СЛУЖБА СТРАЖ: Вечный AlarmManager взведен.");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Не удалось взвести цикличный AlarmManager: " + e.getMessage());
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Notification notification = createVoipNotification("Рация активна в фоне", null);
+       Log.d(TAG, "@@@ JAVA СЛУЖБА: onStartCommand() вызвана");
+        // Будильник-страж при старте подвязывается строго к ТИХОМУ каналу
+        Notification notification = createVoipNotification("Рация активна в фоне", null, false);
         startForeground(1, notification);
-        return START_STICKY;
-    }
+        return START_STICKY;    }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID, "Входящие вызовы TeleLoc", NotificationManager.IMPORTANCE_HIGH);
-            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-            channel.enableLights(true);
-            channel.enableVibration(true);
-            
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
-                manager.createNotificationChannel(channel);
+                // 1. СОЗДАЕМ ТИХИЙ КАНАЛ ДЛЯ БУДИЛЬНИКА (Чтобы не пищал каждые 10 секунд)
+                NotificationChannel silentChannel = new NotificationChannel(
+                    CHANNEL_ID_SILENT, "Дежурный режим рации", NotificationManager.IMPORTANCE_LOW);
+                silentChannel.setSound(null, null);
+                silentChannel.enableVibration(false);
+                silentChannel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+                manager.createNotificationChannel(silentChannel);
+
+                // 2. СОЗДАЕМ ГРОМКИЙ VoIP КАНАЛ ДЛЯ РЕАЛЬНОГО ЗВОНКА АНФИСЫ
+                NotificationChannel voipChannel = new NotificationChannel(
+                    CHANNEL_ID_VOIP, "Входящие вызовы TeleLoc", NotificationManager.IMPORTANCE_HIGH);
+                
+                // Назначаем стандартный системный рингтон звонка на уровне Android
+                android.net.Uri defaultRingtoneUri = android.provider.Settings.System.DEFAULT_RINGTONE_URI;
+                voipChannel.setSound(defaultRingtoneUri, new android.media.AudioAttributes.Builder()
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .build());
+                
+                voipChannel.enableVibration(true);
+                voipChannel.setVibrationPattern(new long[]{0, 500, 500, 500}); // Цикл вибрации звонка
+                voipChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                manager.createNotificationChannel(voipChannel);
             }
         }
     }
 
-    private Notification createVoipNotification(String text, PendingIntent fullScreenIntent) {
+    // Добавлен флаг isRealCall для разделения каналов
+    private Notification createVoipNotification(String text, PendingIntent fullScreenIntent, boolean isRealCall) {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O 
-            ? new Notification.Builder(this, CHANNEL_ID) 
+            ? new Notification.Builder(this, isRealCall ? CHANNEL_ID_VOIP : CHANNEL_ID_SILENT) 
             : new Notification.Builder(this);
 
         builder.setContentTitle("TeleLoc Рация")
                .setContentText(text)
-               .setSmallIcon(android.R.drawable.ic_menu_call)
-               .setCategory(Notification.CATEGORY_CALL)
-               .setPriority(Notification.PRIORITY_HIGH)
-               .setOngoing(true);
+               .setSmallIcon(android.R.drawable.ic_menu_call);
 
-        if (fullScreenIntent != null) {
-            builder.setFullScreenIntent(fullScreenIntent, true);
-
-            // СТРОГАЯ ОФИЦИАЛЬНАЯ VoIP-СПЕЦИФИКАЦИЯ ANDROID 14 ДЛЯ ПРОБИТИЯ СНА
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                Intent hangupIntent = new Intent(this, TeleLocService.class);
-                PendingIntent declinePendingIntent = PendingIntent.getService(this, 1, hangupIntent, PendingIntent.FLAG_IMMUTABLE);
-                
-                android.app.Person incomingCaller = new android.app.Person.Builder()
-                    .setName(text.replace("Входящий вызов от ", ""))
-                    .setImportant(true)
-                    .build();
-
-                // Обертка в CallStyle заставляет ядро Android зажечь экран и вывести QML окно
-                builder.setStyle(Notification.CallStyle.forIncomingCall(
-                    incomingCaller, declinePendingIntent, fullScreenIntent));
-            }
+        if (isRealCall && fullScreenIntent != null) {
+            // Если это РЕАЛЬНЫЙ звонок Анфисы — врубаем нативные телефонные приоритеты
+            builder.setCategory(Notification.CATEGORY_CALL)
+                   .setPriority(Notification.PRIORITY_MAX)
+                   .setFullScreenIntent(fullScreenIntent, true)
+                   .setAutoCancel(true); 
+                   
+            // Дублируем системный звук для старых версий Android
+            builder.setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE);
+        } else {
+            // Если это фоновое тиканье стража — сидим абсолютно беззвучно
+            builder.setCategory(Notification.CATEGORY_SERVICE)
+                   .setPriority(Notification.PRIORITY_MIN)
+                   .setOngoing(true);
         }
 
         return builder.build();
     }
-
     private void startServerThread() {
         m_isRunning = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
+                    Log.d(TAG, "@@@ СЕТЬ JAVA: Пытаюсь открыть TCP порт 28500...");
                     m_serverSocket = new ServerSocket(28500);
-                    Log.d(TAG, "Java TCP-будильник запущен на порту 28500");
+                    Log.d(TAG, "@@@ СЕТЬ JAVA: ПОРТ 28500 УСПЕШНО ОТКРЫТ! Жду подключений...");
 
                     while (m_isRunning) {
                         Socket clientSocket = m_serverSocket.accept();
                         String remoteIp = clientSocket.getInetAddress().getHostAddress();
+                        Log.d(TAG, "@@@ СЕТЬ JAVA: Есть подключение от IP: " + remoteIp);
                         
                         BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
                         String rawData = reader.readLine();
+                        Log.d(TAG, "@@@ СЕТЬ JAVA: Прочитана строка данных: " + (rawData != null ? rawData : "NULL"));
+                        
                         clientSocket.close();
 
                         if (rawData != null && !rawData.trim().isEmpty()) {
@@ -109,35 +157,37 @@ public class TeleLocService extends Service {
                                 String callerName = obj.optString("name");
 
                                 if ("incoming_call".equals(type)) {
-                                    // ИСПРАВЛЕНО: Передаем ОБА параметра (Имя и IP)
+                                    Log.d(TAG, "@@@ СЕТЬ JAVA: Распознан входящий вызов от " + callerName + ". Запускаю triggerFullScreenCall");
                                     triggerFullScreenCall(callerName, remoteIp);
                                 }
                             } catch (Exception e) {
-                                Log.e(TAG, "Ошибка парсинга: " + e.getMessage());
+                                Log.e(TAG, "@@@ ОШИБКА JAVA ПАРСИНГА JSON: " + e.getMessage());
                             }
                         }
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Критическая ошибка сервера: " + e.getMessage());
+                    Log.e(TAG, "@@@ КРИТИЧЕСКАЯ ОШИБКА JAVA СЕРВЕРА НА ПОРТУ 28500: " + e.getMessage());
                 }
             }
         }).start();
     }
-
      private void triggerFullScreenCall(String callerName, String callerIp) {
-        // 1. Аппаратно зажигаем дисплей смартфона
+        Log.d(TAG, "@@@ ОКНО JAVA: Активация триггера вызова для " + callerName);
+        
+        // 1. Аппаратно зажигаем дисплей смартфона на максимальную яркость на 10 секунд
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 android.os.PowerManager.WakeLock wl = pm.newWakeLock(
                     android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK | android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "TeleLoc::Wake");
                 wl.acquire(10000);
+                Log.d(TAG, "@@@ ОКНО JAVA: Аппаратный WakeLock экрана выполнен");
             }
         } catch (Exception e) {
             Log.e(TAG, "Ошибка экрана: " + e.getMessage());
         }
 
-        // 2. Включаем физический вибромотор
+        // 2. Включаем физический вибромотор смартфона на 600 мс
         try {
             android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             if (v != null) {
@@ -146,53 +196,69 @@ public class TeleLocService extends Service {
                 } else {
                     v.vibrate(600);
                 }
+                Log.d(TAG, "@@@ ОКНО JAVA: Вибромотор отработал");
             }
         } catch (Exception e) {
             Log.e(TAG, "Ошибка вибратора: " + e.getMessage());
         }
 
-        // 3. Формируем Intent на запуск нашего главного QML/C++ окна QtActivity
-        Intent callIntent = new Intent();
-        callIntent.setClassName(this, "org.qtproject.qt.android.QtActivity");
-        callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK 
-                          | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT 
-                          | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                          
-        callIntent.putExtra("caller_name", callerName);
-        callIntent.putExtra("caller_ip", callerIp); 
-
-        try {
-            // СНАЧАЛА принудительно поднимаем весь таск приложения на передний план ОС, 
-            // если оно уже свернуто в списке запущенных!
-            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-            if (am != null) {
-                java.util.List<android.app.ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(10);
-                for (android.app.ActivityManager.RunningTaskInfo task : tasks) {
-                    if (task.baseActivity != null && task.baseActivity.getPackageName().equals(getPackageName())) {
-                        // Поднимаем существующее окно рации из фона на самый верх экрана
-                        am.moveTaskToFront(task.id, android.app.ActivityManager.MOVE_TASK_WITH_HOME);
-                        break;
-                    }
-                }
-            }
-            
-            // Затем дублируем запуск интента
-            startActivity(callIntent);
-            Log.d(TAG, "Java форсированно подняла задачу QtActivity на передний план");
-        } catch (Exception e) {
-            Log.e(TAG, "Ошибка подъема окна: " + e.getMessage());
+        // 3. УМНЫЙ АВТОЗАПУСК: Автоматически определяем легальное имя класса активности из манифеста Qt 6.8.3
+        Intent callIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        
+        if (callIntent != null) {
+            // Берем нативный компонент лаунчера и перенастраиваем его на VoIP-подъем из фона
+            callIntent.setComponent(callIntent.getComponent());
+            callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK 
+                              | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT 
+                              | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                              
+            callIntent.putExtra("caller_name", callerName);
+            callIntent.putExtra("caller_ip", callerIp);
+            Log.d(TAG, "@@@ ОКНО JAVA: Автоматически определен класс активности: " + callIntent.getComponent().getClassName());
+        } else {
+            // Резервный дефолтный вариант на случай сбоя менеджера пакетов
+            callIntent = new Intent();
+            callIntent.setClassName(this, "org.qtproject.qt.android.QtActivity");
+            callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            callIntent.putExtra("caller_name", callerName);
+            callIntent.putExtra("caller_ip", callerIp);
+            Log.e(TAG, "@@@ ОКНО JAVA ПРЕДУПРЕЖДЕНИЕ: getLaunchIntentForPackage вернул null, откат на дефолт");
         }
 
-        int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
-            ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE 
-            : PendingIntent.FLAG_UPDATE_CURRENT;
+        // 4. Безопасный запуск Activity из контекста службы
+        try {
+            startActivity(callIntent);
+            Log.d(TAG, "@@@ ОКНО JAVA: Вызван startActivity() — Интент успешно отправлен в систему!");
+        } catch (Exception e) {
+            Log.e(TAG, "Ошибка запуска activity: " + e.getMessage());
+        }
 
-        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
-
-        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        // 5. Выводим плашку уведомления в шторку с ID = 1
+        // [Найти внутри метода triggerFullScreenCall в самом конце]
+        final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
-            Notification notification = createVoipNotification("Входящий вызов от " + callerName, fullScreenPendingIntent);
+            int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
+                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE 
+                : PendingIntent.FLAG_UPDATE_CURRENT;
+
+            PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
+            
+            // ИСПРАВЛЕНО: Передаем true в самом конце, чтобы переключить плашку на громкий VoIP-канал со звуком рингтона!
+            Notification notification = createVoipNotification("Входящий вызов от " + callerName, fullScreenPendingIntent, true);
+            
             manager.notify(1, notification);
+            Log.d(TAG, "@@@ ОКНО JAVA: Громкое VoIP-уведомление отправлено в систему менеджеру");
+
+            // Продлим время жизни плашки звонка до 6 секунд, чтобы рингтон успел проиграться пару раз
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        manager.cancel(1);
+                        Log.d(TAG, "@@@ ОКНО JAVA: Временная громкая плашка удалена");
+                    } catch (Exception e) { e.printStackTrace(); }
+                }
+            }, 6000); 
         }
     }
 
@@ -202,6 +268,31 @@ public class TeleLocService extends Service {
         try {
             if (m_serverSocket != null) m_serverSocket.close();
         } catch (Exception e) { e.printStackTrace(); }
+
+        Log.d(TAG, "@@@ СЛУЖБА УНИЧТОЖЕНА: Завожу AlarmManager на экстренное восстановление...");
+        try {
+            Context context = getApplicationContext();
+            Intent restartIntent = new Intent(context, TeleLocWakeReceiver.class);
+            restartIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
+            
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
+                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE 
+                : PendingIntent.FLAG_UPDATE_CURRENT;
+
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(context, 0, restartIntent, flags);
+            android.app.AlarmManager alarm = (android.app.AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (alarm != null) {
+                long triggerTime = System.currentTimeMillis() + 5000; // Через 5 секунд
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarm.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                } else {
+                    alarm.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Не удалось взвести AlarmManager: " + e.getMessage());
+        }
+
         super.onDestroy();
     }
 
