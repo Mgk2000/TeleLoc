@@ -13,7 +13,7 @@ ApplicationWindow {
     property string activeChatPeer: ""
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
-
+    property bool isDebugRecording: false // Наш флаг для кнопки ●/■
     ListModel {
         id: chatLogModel
     }
@@ -171,6 +171,36 @@ ApplicationWindow {
                     }
                     onClicked: netEngine.debugUsers()
                 }
+                Button {
+                    id: debugRecordButton
+                    width: 50
+                    height: 50
+                    background: Rectangle {
+                        color: window.isDebugRecording ? "#e74c3c" : "#34495e"
+                        radius: 8
+                    }
+                    onClicked: {
+                        window.isDebugRecording = !window.isDebugRecording
+                        if (window.isDebugRecording) {
+                            netEngine.startDebugRecord()
+                        } else {
+                            netEngine.stopDebugRecord()
+                        }
+                    }
+                }
+
+                Button {
+                    id: debugPlayButton
+                    width: 50
+                    height: 50
+                    enabled: !window.isDebugRecording
+                    background: Rectangle {
+                        color: debugPlayButton.enabled ? "#2ecc71" : "#7f8c8d"
+                        radius: 8
+                    }
+                    onClicked: netEngine.playDebugRecord()
+                }
+
 
                 Rectangle {
                     id: micVolumeIndicator

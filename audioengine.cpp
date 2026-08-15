@@ -3,7 +3,8 @@
 #include <QAudioDevice>
 #include <QHostAddress>
 #include <QDebug>
-
+#include <QStandardPaths>
+#include <QDir>
 // Глобальный Jitter-буфер для сглаживания входящего сетевого потока
 static QByteArray m_ringBuffer;
 
@@ -189,3 +190,102 @@ void AudioEngine::stop()
     m_outputDevice = nullptr;
     m_ringBuffer.clear();
 }
+// Вспомогательная функция для получения чистого пути к файлу test.wav
+static QString getWavFilePath() {
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(configDir); // Гарантируем, что папка существует
+    return configDir + "/test.wav";
+}
+
+void AudioEngine::startRecording() {
+    if (m_isRecording) return;
+
+    QString filePath = getWavFilePath();
+    m_recordFile.setFileName(filePath);
+
+    // Открываем файл. Сначала пишем пустые 44 байта, чтобы зарезервировать место под WAV-заголовок
+    if (m_recordFile.open(QIODevice::WriteOnly)) {
+        qDebug() << "@@@ ЗВУК C++: Начало записи в файл:" << filePath;
+        m_recordFile.write(QByteArray(44, 0));
+        m_isRecording = true;
+    } else {
+        qDebug() << "@@@ ЗВУК C++ ОШИБКА: Не удалось открыть файл для записи:" << m_recordFile.errorString();
+    }
+}
+
+void AudioEngine::stopRecording() {
+    if (!m_isRecording) return;
+    m_isRecording = false;
+
+    // Считаем точный размер накопленных аудио-данных
+    quint32 dataSize = m_recordFile.size() - 44;
+
+    // Формируем честный системный WAV-заголовок
+    WAVHeader header;
+    header.chunkSize = 36 + dataSize;
+    header.subchunk2Size = dataSize;
+
+    // Настройки частоты (замените 16000 на вашу частоту, если в рации используется 8000 или 44100)
+    header.sampleRate = 16000;
+    header.bitsPerSample = 16;
+    header.numChannels = 1;
+    header.byteRate = header.sampleRate * header.numChannels * (header.bitsPerSample / 8);
+    header.blockAlign = header.numChannels * (header.bitsPerSample / 8);
+
+    // Возвращаемся в самое начало файла (на нулевой байт) и перезаписываем пустые байты реальной структурой
+    if (m_recordFile.seek(0)) {
+        m_recordFile.write(reinterpret_cast<const char*>(&header), 44);
+        qDebug() << "@@@ ЗВУК C++: Запись остановлена. Заголовок WAV успешно сформирован. Размер данных:" << dataSize;
+    }
+
+    m_recordFile.close();
+}
+
+void AudioEngine::playRecordedFile() {
+    QString filePath = getWavFilePath();
+    m_playFile.setFileName(filePath);
+
+    if (!m_playFile.open(QIODevice::ReadOnly)) {
+        qDebug() << "@@@ ЗВУК C++ ОШИБКА: Не удалось открыть записанный файл для чтения:" << m_playFile.errorString();
+        return;
+    }
+
+    // Пропускаем 44 байта заголовка, чтобы воспроизводить чистый PCM-звук
+    m_playFile.seek(44);
+
+    qDebug() << "@@@ ЗВУК C++: Начинаю воспроизведение записанного test.wav...";
+
+    // Используем стандартный формат рации
+    QAudioFormat format;
+    format.setSampleRate(16000);
+    format.setChannelCount(1);
+    format.setSampleFormat(QAudioFormat::Int16);
+
+    QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+
+    // Удаляем старый плеер, если он остался в памяти
+    if (m_audioSink) {
+        m_audioSink->stop();
+        delete m_audioSink;
+    }
+
+    m_audioSink = new QAudioSink(outputDevice, format, this);
+
+    // Соединяем сигнал окончания файла, чтобы вовремя закрыть его
+    connect(m_audioSink, &QAudioSink::stateChanged, this, [this](QAudio::State newState) {
+        if (newState == QAudio::IdleState || newState == QAudio::StoppedState) {
+            m_audioSink->stop();
+            m_playFile.close();
+            qDebug() << "@@@ ЗВУК C++: Воспроизведение test.wav завершено, файл закрыт.";
+        }
+    });
+
+    // Напрямую скармливаем файл аудио-выходу девайса Петра
+    m_audioSink->start(&m_playFile);
+}
+void AudioEngine::writeAudioFrame(const QByteArray &data) {
+    if (m_isRecording && m_recordFile.isOpen()) {
+        m_recordFile.write(data);
+    }
+}
+

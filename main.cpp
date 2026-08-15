@@ -95,7 +95,7 @@ int main(int argc, char *argv[])
             "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
 
         if (context.isValid()) {
-            qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Таймер сработал, ищу класс службы...";
+         //   qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Таймер сработал, ищу класс службы...";
 
             // Вариант 1 (маленькие буквы)
             QJniObject classNameStr = QJniObject::fromString("org.qtproject.example.appteleloc.TeleLocService");
@@ -104,14 +104,14 @@ int main(int argc, char *argv[])
 
             // Вариант 2 (заглавные буквы)
             if (!serviceClass.isValid()) {
-                qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Строчный вариант мимо, пробую appTeleLoc...";
+                //qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Строчный вариант мимо, пробую appTeleLoc...";
                 classNameStr = QJniObject::fromString("org.qtproject.example.appTeleLoc.TeleLocService");
                 serviceClass = QJniObject::callStaticObjectMethod(
                     "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", classNameStr.object());
             }
 
             if (serviceClass.isValid()) {
-                qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: КЛАСС СЛУЖБЫ НАЙДЕН! Стреляю startForegroundService...";
+               // qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: КЛАСС СЛУЖБЫ НАЙДЕН! Стреляю startForegroundService...";
                 QJniObject intent("android/content/Intent", "(Landroid/content/Context;Ljava/lang/Class;)V",
                                   context.object(), serviceClass.object());
                 if (intent.isValid()) {
@@ -120,10 +120,10 @@ int main(int argc, char *argv[])
                         "(Landroid/content/Intent;)Landroid/content/ComponentName;",
                         intent.object()
                         );
-                    qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Результат запуска компонент =" << (componentName.isValid() ? "УСПЕХ" : "NULL");
+                    //qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Результат запуска компонент =" << (componentName.isValid() ? "УСПЕХ" : "NULL");
                 }
             } else {
-                qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: КАТАСТРОФА! Класс Java вообще не обнаружен в DEX.";
+               // qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: КАТАСТРОФА! Класс Java вообще не обнаружен в DEX.";
             }
         } else {
             qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Контекст Activity невалиден!";

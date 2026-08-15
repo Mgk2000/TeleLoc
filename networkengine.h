@@ -40,6 +40,9 @@ public:
     Q_INVOKABLE void debugUsers();
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
+    Q_INVOKABLE void startDebugRecord();
+    Q_INVOKABLE void stopDebugRecord();
+    Q_INVOKABLE void playDebugRecord();
 
 signals:
     void peerListChanged();
@@ -60,6 +63,7 @@ private slots:
 private:
     void readConfig();
     void savePeersToConfig();
+    void sendTcpPacket(const QString &ip, const QByteArray &data);
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;
     QTcpSocket *tcpClientSocket;
