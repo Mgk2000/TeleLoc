@@ -32,6 +32,9 @@
     <!-- Разрешения для использования системного будильника на Android 14+ -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+	<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
 
     <!-- %%INSERT_FEATURES -->
@@ -80,6 +83,7 @@
         <service android:name="org.qtproject.example.appTeleLoc.TeleLocService"
 				 android:foregroundServiceType="mediaPlayback"
 				 android:stopWithTask="false"
+				 android:process=":remote"
                  android:exported="false">
             <meta-data android:name="android.app.lib_name" android:value="appTeleLoc" />
             <meta-data android:name="android.app.background_running" android:value="true" />

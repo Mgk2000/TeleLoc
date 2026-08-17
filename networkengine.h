@@ -34,13 +34,12 @@ public:
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE QString getSavedName();
     Q_INVOKABLE void saveNameToFile(const QString &name);
-    Q_INVOKABLE void callSpecificIp(const QString &targetIp, int netType);
-
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
-
+    Q_INVOKABLE void refreshPeersForUi();
+    QList<UserInfo> loadPeersFromConfig();
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -49,12 +48,15 @@ signals:
     void callStopped();
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
+    void usersModelChanged();
 
 private slots:
     void onNewConnection();
     void onReadyTcpRead();
     void onReadyUdpRead();
+#ifndef Q_OS_ANDROID
     void sendDiscovery();
+#endif
     void updateInterfaces();
 
 private:

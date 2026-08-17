@@ -20,6 +20,7 @@ public:
     void startRecording(const QString &targetIp);
     void stop();
 
+    void writeAudioFrame(const QByteArray &data);
 private slots:
     void onNewConnection();
     void onReadyRead();

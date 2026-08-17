@@ -9,99 +9,114 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.util.Log;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-import org.json.JSONObject;
 
 public class TeleLocService extends Service {
     private static final String TAG = "TeleLocService";
-    private static final String CHANNEL_ID = "TeleLocVoipChannel";
+    private static final String CHANNEL_ID_SILENT = "TeleLocSilentChannel";
+    private static final String CHANNEL_ID_VOIP = "TeleLocVoipChannel";
+    private static final int NOTIFICATION_ID = 9999;
     private ServerSocket m_serverSocket;
     private boolean m_isRunning = false;
-    private static final String CHANNEL_ID_SILENT = "TeleLocKeepAliveChannel";
-    private static final String CHANNEL_ID_VOIP = "TeleLocVoipChannel";
-    // СТАТИЧЕСКИЙ АВТОЗАПУСК: Поднимает службу из Java при создании окна Qt
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        Log.d(TAG, "@@@ JAVA СЛУЖБА: onCreate() запущена");
-        createNotificationChannel();
-        startServerThread();
-        
-        // ХОТ-ФИКС ДЛЯ SAMSUNG И XIAOMI: Взводим вечный системный будильник-страж!
-        scheduleStickyAlarm();
+private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
+
+ @Override
+public void onCreate() {
+    super.onCreate();
+    Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов onCreate()");
+
+    m_isRunning = true;
+
+    try {
+		Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить WifiManageк"); 
+        android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+				Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManageк получен"); 
+
+        if (wm != null) {
+		Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить m_multicastLock"); 
+            m_multicastLock = wm.createMulticastLock("TeleLoc:MulticastLock");
+            m_multicastLock.acquire();
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock успешно получен.");
+        }
+		else
+			Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManager = 0.");
+    } catch (Exception e) {
+        e.printStackTrace();
     }
 
-    // Метод, который регистрирует в недрах Android автономный перезапуск рации
-    private void scheduleStickyAlarm() {
+    createNotificationChannel();
+    Notification notification = createVoipNotification("Рация TeleLoc работает в дежурном режиме", null, false);
+    startForeground(NOTIFICATION_ID, notification);
+
+    new Thread(new Runnable() {
+        @Override
+        public void run() {
+            startTcpServer();
+        }
+    }).start();
+
+    startUdpReceiver();
+}
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов onStartCommand()");
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+    Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов onDestroy()");
+    m_isRunning = false;
+    
+    if (m_multicastLock != null && m_multicastLock.isHeld()) {
         try {
-            Context context = getApplicationContext();
-            Intent restartIntent = new Intent(context, TeleLocWakeReceiver.class);
-            restartIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
-            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
-                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE 
-                : PendingIntent.FLAG_UPDATE_CURRENT;
-
-            PendingIntent pendingIntent = PendingIntent.getBroadcast(context, 0, restartIntent, flags);
-            android.app.AlarmManager alarm = (android.app.AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-
-            if (alarm != null) {
-                long triggerTime = System.currentTimeMillis() + 60000; // 60 секунд
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarm.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
-                } else {
-                    alarm.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
-                }
-                Log.d(TAG, "@@@ СЛУЖБА СТРАЖ: Вечный AlarmManager взведен.");
-            }
+            m_multicastLock.release();
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock успешно освобожден.");
         } catch (Exception e) {
-            Log.e(TAG, "Не удалось взвести цикличный AlarmManager: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
+    if (m_serverSocket != null) {
+        try {
+            m_serverSocket.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    super.onDestroy();
+}
+
+
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-       Log.d(TAG, "@@@ JAVA СЛУЖБА: onStartCommand() вызвана");
-        // Будильник-страж при старте подвязывается строго к ТИХОМУ каналу
-        Notification notification = createVoipNotification("Рация активна в фоне", null, false);
-        startForeground(1, notification);
-        return START_STICKY;    }
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
-                // 1. СОЗДАЕМ ТИХИЙ КАНАЛ ДЛЯ БУДИЛЬНИКА (Чтобы не пищал каждые 10 секунд)
                 NotificationChannel silentChannel = new NotificationChannel(
                     CHANNEL_ID_SILENT, "Дежурный режим рации", NotificationManager.IMPORTANCE_LOW);
                 silentChannel.setSound(null, null);
                 silentChannel.enableVibration(false);
-                silentChannel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
                 manager.createNotificationChannel(silentChannel);
 
-                // 2. СОЗДАЕМ ГРОМКИЙ VoIP КАНАЛ ДЛЯ РЕАЛЬНОГО ЗВОНКА АНФИСЫ
                 NotificationChannel voipChannel = new NotificationChannel(
                     CHANNEL_ID_VOIP, "Входящие вызовы TeleLoc", NotificationManager.IMPORTANCE_HIGH);
-                
-                // Назначаем стандартный системный рингтон звонка на уровне Android
-                android.net.Uri defaultRingtoneUri = android.provider.Settings.System.DEFAULT_RINGTONE_URI;
-                voipChannel.setSound(defaultRingtoneUri, new android.media.AudioAttributes.Builder()
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .build());
-                
                 voipChannel.enableVibration(true);
-                voipChannel.setVibrationPattern(new long[]{0, 500, 500, 500}); // Цикл вибрации звонка
                 voipChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                 manager.createNotificationChannel(voipChannel);
             }
         }
     }
 
-    // Добавлен флаг isRealCall для разделения каналов
     private Notification createVoipNotification(String text, PendingIntent fullScreenIntent, boolean isRealCall) {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O 
             ? new Notification.Builder(this, isRealCall ? CHANNEL_ID_VOIP : CHANNEL_ID_SILENT) 
@@ -112,16 +127,13 @@ public class TeleLocService extends Service {
                .setSmallIcon(android.R.drawable.ic_menu_call);
 
         if (isRealCall && fullScreenIntent != null) {
-            // Если это РЕАЛЬНЫЙ звонок Анфисы — врубаем нативные телефонные приоритеты
             builder.setCategory(Notification.CATEGORY_CALL)
                    .setPriority(Notification.PRIORITY_MAX)
                    .setFullScreenIntent(fullScreenIntent, true)
-                   .setAutoCancel(true); 
-                   
-            // Дублируем системный звук для старых версий Android
+                   .setAutoCancel(true)
+                   .setOngoing(true);
             builder.setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE);
         } else {
-            // Если это фоновое тиканье стража — сидим абсолютно беззвучно
             builder.setCategory(Notification.CATEGORY_SERVICE)
                    .setPriority(Notification.PRIORITY_MIN)
                    .setOngoing(true);
@@ -129,175 +141,288 @@ public class TeleLocService extends Service {
 
         return builder.build();
     }
-    private void startServerThread() {
-        m_isRunning = true;
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
+
+ private void startTcpServer() {
+    new Thread(new Runnable() {
+        @Override
+        public void run() {
+            while (m_isRunning) {
                 try {
-                    Log.d(TAG, "@@@ СЕТЬ JAVA: Пытаюсь открыть TCP порт 28500...");
-                    m_serverSocket = new ServerSocket(28500);
-                    Log.d(TAG, "@@@ СЕТЬ JAVA: ПОРТ 28500 УСПЕШНО ОТКРЫТ! Жду подключений...");
+                    String myName = "Неизвестный";
+                    String configPath = QStandardPaths_writableLocation();
+                    java.io.File file = new java.io.File(configPath);
+                    if (file.exists()) {
+                        java.io.FileInputStream fis = new java.io.FileInputStream(file);
+                        byte[] data = new byte[(int) file.length()];
+                        fis.read(data);
+                        fis.close();
+                        org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
+                        String savedName = configObj.optString("my_name");
+                        if (savedName != null && !savedName.isEmpty()) {
+                            myName = savedName;
+                        }
+                    }
 
-                    while (m_isRunning) {
-                        Socket clientSocket = m_serverSocket.accept();
-                        String remoteIp = clientSocket.getInetAddress().getHostAddress();
-                        Log.d(TAG, "@@@ СЕТЬ JAVA: Есть подключение от IP: " + remoteIp);
-                        
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
-                        String rawData = reader.readLine();
-                        Log.d(TAG, "@@@ СЕТЬ JAVA: Прочитана строка данных: " + (rawData != null ? rawData : "NULL"));
-                        
-                        clientSocket.close();
+                    String myIp = getLocalIpAddress();
+                    String json = "{\"type\":\"discovery\",\"name\":\"" + myName + "\",\"ip0\":\"" + myIp + "\",\"ip1\":\"\",\"ip2\":\"\"}";
+                    byte[] bytes = json.getBytes("UTF-8");
+                    java.net.DatagramSocket socket = new java.net.DatagramSocket();
 
-                        if (rawData != null && !rawData.trim().isEmpty()) {
-                            try {
-                                JSONObject obj = new JSONObject(rawData.trim());
-                                String type = obj.optString("type");
-                                String callerName = obj.optString("name");
+                    socket.setBroadcast(true);
+                    String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255"};
+                    for (String ip : ips) {
+                        java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
+                        java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28000);
+                        socket.send(packet);
+                    }
 
-                                if ("incoming_call".equals(type)) {
-                                    Log.d(TAG, "@@@ СЕТЬ JAVA: Распознан входящий вызов от " + callerName + ". Запускаю triggerFullScreenCall");
-                                    triggerFullScreenCall(callerName, remoteIp);
+                    if (file.exists()) {
+                        java.io.FileInputStream fis = new java.io.FileInputStream(file);
+                        byte[] data = new byte[(int) file.length()];
+                        fis.read(data);
+                        fis.close();
+                        org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
+                        org.json.JSONArray peers = configObj.optJSONArray("peers");
+                        if (peers != null) {
+                            for (int i = 0; i < peers.length(); i++) {
+                                org.json.JSONObject peer = peers.getJSONObject(i);
+                                String pIp = peer.optString("ip0");
+                                if (pIp != null && !pIp.isEmpty()) {
+                                    java.net.InetAddress addr = java.net.InetAddress.getByName(pIp);
+                                    java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28000);
+                                    socket.send(packet);
                                 }
-                            } catch (Exception e) {
-                                Log.e(TAG, "@@@ ОШИБКА JAVA ПАРСИНГА JSON: " + e.getMessage());
                             }
                         }
                     }
+                    socket.close();
+                    //Log.d(TAG, "@@@ JAVA СЛУЖБА: Адресный пакет Discovery отправлен пирам.");
+                    Thread.sleep(30000);
                 } catch (Exception e) {
-                    Log.e(TAG, "@@@ КРИТИЧЕСКАЯ ОШИБКА JAVA СЕРВЕРА НА ПОРТУ 28500: " + e.getMessage());
+                    e.printStackTrace();
                 }
             }
-        }).start();
-    }
-     private void triggerFullScreenCall(String callerName, String callerIp) {
-        Log.d(TAG, "@@@ ОКНО JAVA: Активация триггера вызова для " + callerName);
+        }
+    }).start();
+
+    m_isRunning = true;
+    try {
+        m_serverSocket = new ServerSocket(28500);
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: TCP Сервер запущен на порту 28500");
+
+        while (m_isRunning) {
+            Socket clientSocket = m_serverSocket.accept();
+            String remoteIp = clientSocket.getInetAddress().getHostAddress();
+            BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
+            String line = in.readLine();
+            if (line != null) {
+                try {
+                    org.json.JSONObject obj = new org.json.JSONObject(line);
+                    if ("incoming_call".equals(obj.optString("type"))) {
+                        triggerFullScreenCall(obj.optString("name", "Некто"), remoteIp);
+                    }
+                } catch (Exception e) {}
+            }
+            clientSocket.close();
+        }
+    } catch (Exception e) {}
+}
+
+
+
+
+    public void triggerFullScreenCall(String callerName, String remoteIp) {
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callerName + " (" + remoteIp + ")");
         
-        // 1. Аппаратно зажигаем дисплей смартфона на максимальную яркость на 10 секунд
-        try {
-            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null) {
-                android.os.PowerManager.WakeLock wl = pm.newWakeLock(
-                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK | android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "TeleLoc::Wake");
-                wl.acquire(10000);
-                Log.d(TAG, "@@@ ОКНО JAVA: Аппаратный WakeLock экрана выполнен");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Ошибка экрана: " + e.getMessage());
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null) {
+            PowerManager.WakeLock wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, 
+                "TeleLoc:CallWakeLock"
+            );
+            wl.acquire(5000);
         }
 
-        // 2. Включаем физический вибромотор смартфона на 600 мс
-        try {
-            android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-            if (v != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    v.vibrate(android.os.VibrationEffect.createOneShot(600, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
-                } else {
-                    v.vibrate(600);
-                }
-                Log.d(TAG, "@@@ ОКНО JAVA: Вибромотор отработал");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Ошибка вибратора: " + e.getMessage());
-        }
-
-        // 3. УМНЫЙ АВТОЗАПУСК: Автоматически определяем легальное имя класса активности из манифеста Qt 6.8.3
         Intent callIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        
-        if (callIntent != null) {
-            // Берем нативный компонент лаунчера и перенастраиваем его на VoIP-подъем из фона
-            callIntent.setComponent(callIntent.getComponent());
-            callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK 
-                              | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT 
-                              | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                              
-            callIntent.putExtra("caller_name", callerName);
-            callIntent.putExtra("caller_ip", callerIp);
-            Log.d(TAG, "@@@ ОКНО JAVA: Автоматически определен класс активности: " + callIntent.getComponent().getClassName());
-        } else {
-            // Резервный дефолтный вариант на случай сбоя менеджера пакетов
-            callIntent = new Intent();
-            callIntent.setClassName(this, "org.qtproject.qt.android.QtActivity");
-            callIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            callIntent.putExtra("caller_name", callerName);
-            callIntent.putExtra("caller_ip", callerIp);
-            Log.e(TAG, "@@@ ОКНО JAVA ПРЕДУПРЕЖДЕНИЕ: getLaunchIntentForPackage вернул null, откат на дефолт");
+        if (callIntent == null) {
+            Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА: Не удалось получить Launch Intent для приложения!");
+            return;
         }
 
-        // 4. Безопасный запуск Activity из контекста службы
+        callIntent.setAction("org.qtproject.example.appteleloc.WAKE_UP_ACTION");
+        callIntent.putExtra("callerName", callerName);
+        callIntent.putExtra("remoteIp", remoteIp);
+        callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+
         try {
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка фонового вызова startActivity()...");
             startActivity(callIntent);
-            Log.d(TAG, "@@@ ОКНО JAVA: Вызван startActivity() — Интент успешно отправлен в систему!");
         } catch (Exception e) {
-            Log.e(TAG, "Ошибка запуска activity: " + e.getMessage());
+            Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА запуска startActivity(): " + e.getMessage());
         }
 
-        // 5. Выводим плашку уведомления в шторку с ID = 1
-        // [Найти внутри метода triggerFullScreenCall в самом конце]
         final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
-            int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
-                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE 
+            int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
                 : PendingIntent.FLAG_UPDATE_CURRENT;
 
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
             
-            // ИСПРАВЛЕНО: Передаем true в самом конце, чтобы переключить плашку на громкий VoIP-канал со звуком рингтона!
             Notification notification = createVoipNotification("Входящий вызов от " + callerName, fullScreenPendingIntent, true);
-            
             manager.notify(1, notification);
-            Log.d(TAG, "@@@ ОКНО JAVA: Громкое VoIP-уведомление отправлено в систему менеджеру");
+            Log.d(TAG, "@@@ ОКНО JAVA: Громкая плашка выслана менеджеру");
 
-            // Продлим время жизни плашки звонка до 6 секунд, чтобы рингтон успел проиграться пару раз
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
                     try {
                         manager.cancel(1);
                         Log.d(TAG, "@@@ ОКНО JAVA: Временная громкая плашка удалена");
-                    } catch (Exception e) { e.printStackTrace(); }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
                 }
-            }, 6000); 
+            }, 6000);
         }
     }
-
     @Override
-    public void onDestroy() {
-        m_isRunning = false;
-        try {
-            if (m_serverSocket != null) m_serverSocket.close();
-        } catch (Exception e) { e.printStackTrace(); }
-
-        Log.d(TAG, "@@@ СЛУЖБА УНИЧТОЖЕНА: Завожу AlarmManager на экстренное восстановление...");
-        try {
-            Context context = getApplicationContext();
-            Intent restartIntent = new Intent(context, TeleLocWakeReceiver.class);
-            restartIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
-            
-            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S 
-                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE 
-                : PendingIntent.FLAG_UPDATE_CURRENT;
-
-            PendingIntent pendingIntent = PendingIntent.getBroadcast(context, 0, restartIntent, flags);
-            android.app.AlarmManager alarm = (android.app.AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-            if (alarm != null) {
-                long triggerTime = System.currentTimeMillis() + 5000; // Через 5 секунд
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarm.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
-                } else {
-                    alarm.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent);
+    public void onTaskRemoved(Intent rootIntent) {
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Пользователь смахнул приложение! Планирую перезапуск...");
+        Intent restartServiceIntent = new Intent(getApplicationContext(), this.getClass());
+        restartServiceIntent.setPackage(getPackageName());
+        PendingIntent restartServicePendingIntent = PendingIntent.getService(
+            getApplicationContext(), 1, restartServiceIntent, 
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_ONE_SHOT
+        );
+        android.app.AlarmManager alarmManager = (android.app.AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager != null) {
+            alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, restartServicePendingIntent);
+        }
+        super.onTaskRemoved(rootIntent);
+    }
+private String getLocalIpAddress() {
+    try {
+        java.util.List<java.net.NetworkInterface> interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces());
+        for (java.net.NetworkInterface intf : interfaces) {
+            java.util.List<java.net.InetAddress> addrs = java.util.Collections.list(intf.getInetAddresses());
+            for (java.net.InetAddress addr : addrs) {
+                if (!addr.isLoopbackAddress()) {
+                    String sAddr = addr.getHostAddress();
+                    boolean isIPv4 = sAddr.indexOf(':') < 0;
+                    if (isIPv4) return sAddr;
                 }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Не удалось взвести AlarmManager: " + e.getMessage());
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    return "";
+}
+    private String QStandardPaths_writableLocation() {
+        return getFilesDir().getParent() + "/files/teleloc.conf";
+    }
+private void saveConfigToFile(org.json.JSONObject configObj) {
+    try {
+        String configPath = QStandardPaths_writableLocation();
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
+        fos.write(configObj.toString().getBytes("UTF-8"));
+        fos.close();
+        //Log.d(TAG, "@@@ JAVA СЛУЖБА: Конфиг успешно обновлен на диске.");
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+private void startUdpReceiver() {
+    new Thread(new Runnable() {
+        @Override
+        public void run() {
+            try {
+                java.net.DatagramSocket socket = new java.net.DatagramSocket(28000);
+                socket.setReuseAddress(true);
+                byte[] buffer = new byte[4096];
+                Log.d(TAG, "@@@ JAVA СЛУЖБА: UDP Приемник Discovery запущен на порту 28000");
+
+                while (m_isRunning) {
+                    java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
+                    socket.receive(packet);
+                    
+                    String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8").trim();
+                    Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message);
+
+                    try {
+                        org.json.JSONObject obj = new org.json.JSONObject(message);
+                        if ("discovery".equals(obj.optString("type"))) {
+                            String pName = obj.optString("name");
+                            String pIp = obj.optString("ip0");
+                            
+                            if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
+                                Log.d(TAG, "@@@ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
+                                updatePeerInConfig(pName, pIp);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА парсинга JSON: " + e.getMessage());
+                    }
+                }
+                socket.close();
+            } catch (Exception e) {
+                Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА UDP приемника: " + e.getMessage());
+            }
+        }
+    }).start();
+}
+private void updatePeerInConfig(String name, String ip) {
+    try {
+        String configPath = QStandardPaths_writableLocation();
+        java.io.File file = new java.io.File(configPath);
+        org.json.JSONObject configObj = null;
+        
+        if (file.exists() && file.length() > 0) {
+            java.io.FileInputStream fis = new java.io.FileInputStream(file);
+            byte[] data = new byte[(int) file.length()];
+            fis.read(data);
+            fis.close();
+            configObj = new org.json.JSONObject(new String(data, "UTF-8"));
+        } else {
+            configObj = new org.json.JSONObject();
         }
 
-        super.onDestroy();
-    }
+        org.json.JSONArray peers = configObj.optJSONArray("peers");
+        if (peers == null) {
+            peers = new org.json.JSONArray();
+            configObj.put("peers", peers);
+        }
 
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
+        boolean found = false;
+        for (int i = 0; i < peers.length(); i++) {
+            org.json.JSONObject peer = peers.getJSONObject(i);
+            if (name.equals(peer.optString("name"))) {
+                peer.put("ip0", ip);
+                peer.put("isAlive", true); // ИСПРАВЛЕНО: обновляем флаг активности
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            org.json.JSONObject newPeer = new org.json.JSONObject();
+            newPeer.put("name", name);
+            newPeer.put("ip0", ip);
+            newPeer.put("ip1", "");
+            newPeer.put("ip2", "");
+            newPeer.put("isAlive", true); // ИСПРАВЛЕНО: выставляем флаг при создании
+            peers.put(newPeer);
+        }
+
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
+        fos.write(configObj.toString().getBytes("UTF-8"));
+        fos.close();
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Конфиг успешно перезаписан. Пир " + name + " добавлен/обновлен.");
+    } catch (Exception e) {
+        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА внутри updatePeerInConfig: " + e.getMessage());
+        e.printStackTrace();
     }
+}
+
 }

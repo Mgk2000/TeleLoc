@@ -129,6 +129,30 @@ int main(int argc, char *argv[])
             qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Контекст Activity невалиден!";
         }
     });
+    // ИСПРАВЛЕНО ДЛЯ БАГА №1: Проверяем и запрашиваем разрешение на показ окон из фона
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "()Landroid/app/Activity;");
+    if (activity.isValid()) {
+        QJniObject context = activity.callObjectMethod("getApplicationContext", "()Landroid/content/Context;");
+        jboolean canDraw = QJniObject::callStaticMethod<jboolean>(
+            "android/provider/Settings", "canDrawOverlays", "(Landroid/content/Context;)Z", context.object());
+
+        if (!canDraw) {
+            qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Нет прав рисовать поверх окон! Отправляю пользователя в настройки...";
+            QJniObject intent("android/content/Intent", "()V");
+            QJniObject action = QJniObject::getStaticObjectField("android/provider/Settings", "ACTION_MANAGE_OVERLAY_PERMISSION", "Ljava/lang/String;");
+
+            QString pkgName = context.callObjectMethod<jstring>("getPackageName").toString();
+            QJniObject uri = QJniObject::callStaticObjectMethod("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;",
+                                                                QJniObject::fromString("package:" + pkgName).object());
+
+            intent.callObjectMethod("setAction", "(Ljava/lang/String;)Landroid/content/Intent;", action.object());
+            intent.callObjectMethod("setData", "(Landroid/net/Uri;)Landroid/content/Intent;", uri.object());
+            intent.callMethod<void>("addFlags", "(I)V", 0x10000000);
+
+            activity.callMethod<void>("startActivity", "(Landroid/content/Intent;)V", intent.object());
+        }
+    }
 
     // БЛОК 5: Обработка только холодного старта рации
     if (!incomingCallerName.isEmpty()) {
