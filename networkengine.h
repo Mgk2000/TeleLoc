@@ -40,6 +40,7 @@ public:
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
     Q_INVOKABLE void refreshPeersForUi();
     QList<UserInfo> loadPeersFromConfig();
+    void debugMsg(const QString& s);
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -77,6 +78,8 @@ private:
     QSoundEffect *m_busyTone;
     QSoundEffect *m_incomingRing;
     bool m_isCallActive;
+    void startLocalUnixServer() ;
+
 
 };
 

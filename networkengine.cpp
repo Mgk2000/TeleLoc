@@ -12,10 +12,12 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QThread>
-
+#include <QLocalServer>
+#include <QLocalSocket>
+NetworkEngine * netEngine;
 NetworkEngine::NetworkEngine(QObject *parent)
     : QObject(parent), tcpClientSocket(nullptr), m_activeCallNetType(-1), m_isCallActive(false) {
-
+    netEngine = this;
     m_ringbackTone = new QSoundEffect(this);
     m_ringbackTone->setSource(QUrl("qrc:/qt/qml/TeleLoc/ringback.wav"));
     m_ringbackTone->setLoopCount(QSoundEffect::Infinite);
@@ -42,6 +44,7 @@ NetworkEngine::NetworkEngine(QObject *parent)
     }
 #else
     qDebug() << "@@@ СЕТЬ C++: На Android прием UDP 28000 полностью отключен. Этим занимается Java-служба.";
+    startLocalUnixServer();
 #endif
 
     tcpServer = new QTcpServer(this);
@@ -119,7 +122,7 @@ QStringList NetworkEngine::getUsers(int netType) {
     return list;
 }
 void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr) {
-#ifndef Q_OS_ANDROID
+#ifndef Q_OS_ANDROID1
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull()) return;
@@ -179,6 +182,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     }
 
     if (type == "incoming_call") {
+        qDebug() << QString(data);
         int netType = obj["net_type"].toInt();
         if (m_isCallActive) {
             QJsonObject busyObj;
@@ -491,6 +495,38 @@ void NetworkEngine::savePeersToConfig() {
     }
 }
 
+void NetworkEngine::startLocalUnixServer()
+{
+       auto* server = new QLocalServer(qApp);
+
+        // Удаляем старый сокет, если он остался в памяти от прошлого запуска
+        QLocalServer::removeServer("TeleLocSocketKey");
+
+        // Имя сокета — любая уникальная строка
+        if (server->listen("TeleLocSocketKey")) {
+            qDebug() << "@@@ [C++ UNIX] Локальный сервер УСПЕШНО ЗАПУЩЕН и слушает ключ 'TeleLocSocketKey'!";
+
+            QObject::connect(server, &QLocalServer::newConnection, server, [server]() {
+                QLocalSocket* clientSocket = server->nextPendingConnection();
+                qDebug() << "@@@ [C++ UNIX] Подключение от Java-службы обнаружено!";
+
+                QObject::connect(clientSocket, &QLocalSocket::readyRead, clientSocket, [clientSocket]() {
+                    QByteArray data = clientSocket->readAll();
+                    QString message = QString::fromUtf8(data);
+                    netEngine->parseIncomingSyncData(data,"192.168.0.107");
+                    qDebug() << "@@@ [C++ UNIX УСПЕХ!!!] ПОЛУЧЕНЫ ДАННЫЕ ИЗ СЛУЖБЫ:" << message;
+                    netEngine->debugMsg(message);
+
+                    clientSocket->disconnectFromServer();
+                });
+            });
+        } else {
+            qCritical() << "@@@ [C++ UNIX] ОШИБКА запуска сервера:" << server->errorString();
+        }
+
+
+}
+
 void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) {
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
@@ -578,6 +614,7 @@ void NetworkEngine::updateInterfaces() {
 }
 
 void NetworkEngine::onNewConnection() {
+    qDebug() << "NetworkEngine::onNewConnection()";
     if (tcpClientSocket) {
         tcpClientSocket->disconnectFromHost();
         tcpClientSocket->deleteLater();
@@ -587,9 +624,13 @@ void NetworkEngine::onNewConnection() {
 }
 
 void NetworkEngine::onReadyTcpRead() {
+    qDebug() << "@@@NetworkEngine::onReadyTcpRead() 1";
     QTcpSocket *senderSocket = qobject_cast<QTcpSocket*>(sender());
     if (!senderSocket) return;
     QByteArray data = senderSocket->readAll();
+    //QString sdata = data1;
+    //QByteArray data(sdata.toUtf8());
+    qDebug() << "@@@NetworkEngine::onReadyTcpRead() 2" << QString(data);
     parseIncomingSyncData(data, senderSocket->peerAddress().toString());
 }
 
@@ -600,6 +641,7 @@ void NetworkEngine::onReadyUdpRead() {
         QHostAddress senderHost;
         udpSocket->readDatagram(datagram.data(), datagram.size(), &senderHost);
         QString s (datagram);
+            if (!s.contains("discovery"))
         qDebug() << "@@@@@@@@@@@@@@@@@@@@@onReadyUdpRead" << s;
         parseIncomingSyncData(datagram, senderHost.toString());
     }
@@ -663,6 +705,11 @@ QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
         }
     }
     return activeUsers;
+}
+
+void NetworkEngine::debugMsg(const QString &s)
+{
+    emit messageReceived("Dbg" , s);
 }
 void NetworkEngine::refreshPeersForUi() {
     QString configPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";

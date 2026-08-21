@@ -15,7 +15,9 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-
+import java.io.OutputStream;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 public class TeleLocService extends Service {
     private static final String TAG = "TeleLocService";
     private static final String CHANNEL_ID_SILENT = "TeleLocSilentChannel";
@@ -24,7 +26,44 @@ public class TeleLocService extends Service {
     private ServerSocket m_serverSocket;
     private boolean m_isRunning = false;
 private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
-
+    // Функция отправки данных по локальной сети в Qt
+private void sendToQtViaUnixSocket(final String message) {
+    new Thread(new Runnable() {
+        @Override
+        public void run() {
+            try {
+                Log.d(TAG, "@@@ [Java] Попытка подключения через файловый Unix-сокет...");
+                
+                LocalSocket socket = new LocalSocket();
+                
+                // Вычисляем путь к файлу сокета, который создал Qt.
+                // Qt на Android создает файлы QLocalServer в папке кэша приложения.
+                String socketPath = getCacheDir().getAbsolutePath() + "/TeleLocSocketKey";
+                Log.d(TAG, "@@@ [Java] Ищем сокет по пути: " + socketPath);
+                
+                // Подключаемся через пространство NAMESPACE.FILESYSTEM
+                LocalSocketAddress address = new LocalSocketAddress(
+                    socketPath, 
+                    LocalSocketAddress.Namespace.FILESYSTEM
+                );
+                
+                socket.connect(address);
+                Log.d(TAG, "@@@ [Java] Соединение с C++ успешно установлено!");
+                
+                // Отправляем данные
+                OutputStream output = socket.getOutputStream();
+                output.write(message.getBytes("UTF-8"));
+                output.flush();
+                
+                socket.close();
+                Log.d(TAG, "@@@ [Java УСПЕХ] Данные отправлены в C++!");
+                
+            } catch (Exception e) {
+                Log.e(TAG, "@@@ [Java ОШИБКА Unix] Не удалось отправить данные: " + e.getMessage());
+            }
+        }
+    }).start();
+}
  @Override
 public void onCreate() {
     super.onCreate();
@@ -219,7 +258,9 @@ public void onCreate() {
                 try {
                     org.json.JSONObject obj = new org.json.JSONObject(line);
                     if ("incoming_call".equals(obj.optString("type"))) {
-                        triggerFullScreenCall(obj.optString("name", "Некто"), remoteIp);
+                        //triggerFullScreenCall(obj.optString("name", "Некто"), remoteIp);
+                        triggerFullScreenCall(line, "malamu");
+
                     }
                 } catch (Exception e) {}
             }
@@ -233,7 +274,8 @@ public void onCreate() {
 
     public void triggerFullScreenCall(String callerName, String remoteIp) {
         Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callerName + " (" + remoteIp + ")");
-        
+        sendToQtViaUnixSocket(callerName);
+
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm != null) {
             PowerManager.WakeLock wl = pm.newWakeLock(
@@ -249,7 +291,7 @@ public void onCreate() {
             return;
         }
 
-        callIntent.setAction("org.qtproject.example.appteleloc.WAKE_UP_ACTION");
+        callIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
         callIntent.putExtra("callerName", callerName);
         callIntent.putExtra("remoteIp", remoteIp);
         callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);

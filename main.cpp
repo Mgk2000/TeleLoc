@@ -7,10 +7,14 @@
 #include <QCoreApplication>
 #include <QTimer>
 #include "networkengine.h"
+
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QtCore/qnativeinterface.h>
 #include <QtCore/private/qandroidextras_p.h>
+#include <QLoggingCategory>
+#include <android/log.h>
+
 #endif
 
 int main(int argc, char *argv[])
@@ -20,11 +24,9 @@ int main(int argc, char *argv[])
     SetConsoleCP(CP_UTF8);
     QLocale::setDefault(QLocale::c());
 #endif
-
     QGuiApplication app(argc, argv);
 #ifdef Q_OS_ANDROID
-#include <QtCore/private/qandroidextras_p.h>
-
+    qDebug() << "@@@ TeleLoc started";
     // ФОРСИРОВАННЫЙ ЗАПРОС ПРАВ ДЛЯ QT 6.8.3 (Официальная сигнатура из одной строки)
     QStringList permissions = {
         "android.permission.RECORD_AUDIO",
