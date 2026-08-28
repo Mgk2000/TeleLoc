@@ -78,6 +78,9 @@ ApplicationWindow {
          function onNetVolumeUpdated(volume) {
              netIndicatorText.text = "🔊 " + volume + "%"
          }
+         function onCallPressed(_netType) {
+            window.activeCallNetType = _netType
+         }
     }
 
     Rectangle {

@@ -11,13 +11,24 @@
 #include <QSoundEffect>
 #include <QUrl>
 #include "audioengine.h"
+class QLocalServer;
+class QLocalSocket;
 
 struct UserInfo {
     QString name;
-    QString ip0;
-    QString ip1;
-    QString ip2;
+    QString ip[3];
     bool isAlive;
+};
+struct CallInfo {
+    enum State {idle, inCalling, outCalling, speaking};
+    QString name, ip, type;
+    int netType;
+    qint64 time;
+    State state = idle;
+    void setState(State _state);
+    bool busy() const {
+        return state != idle;
+    }
 };
 
 class NetworkEngine : public QObject
@@ -41,12 +52,19 @@ public:
     Q_INVOKABLE void refreshPeersForUi();
     QList<UserInfo> loadPeersFromConfig();
     void debugMsg(const QString& s);
+    void unpressCallButtons();
+    void pressCallButon(int _netType);
+    CallInfo callInfo;
+
+    QByteArray getCallData(int netType);
+
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
     void incomingCall(const QString &peerName, int netType);
     void callAccepted();
     void callStopped();
+    void callPressed(int _netType);
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
     void usersModelChanged();
@@ -57,6 +75,10 @@ private slots:
     void onReadyUdpRead();
 #ifndef Q_OS_ANDROID
     void sendDiscovery();
+#else
+    void m_unixOnNewConnection();
+    void m_unixSendAlivePing();
+
 #endif
     void updateInterfaces();
 
@@ -71,16 +93,32 @@ private:
 
     QVector<UserInfo> m_users;
     QString m_activePeerIp;
-    int m_activeCallNetType;
     const int PORT = 28000;
 
     QSoundEffect *m_ringbackTone;
     QSoundEffect *m_busyTone;
     QSoundEffect *m_incomingRing;
-    bool m_isCallActive;
-    void startLocalUnixServer() ;
+    bool pendingCall = false;
+    void incomingCall();
+    void reject(const QString & ip);
+    void rejectBusy(const QString & ip);
+#ifdef Q_OS_ANDROID
+    QLocalServer* m_unixServer = 0;
+    QLocalSocket* m_unixClientSocket;
+    void m_unixStartServer();
+    void unixSendAlivePing();
+    bool firstAlive = true;
+#endif
+    QTimer* m_unixAliveTimer;
 
-
+    void sendCall(const QString&, int);
+    QString myIp(int netType) const {
+        if (m_users.isEmpty() || m_users[0].name.isEmpty())
+            return "";
+        else
+            return m_users[0].ip[netType];
+    }
+    void sendCallByTcp(const QString &name, int netType);
 };
 
 #endif // NETWORKENGINE_H
