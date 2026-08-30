@@ -34,7 +34,7 @@ private:
     QTcpServer *m_tcpAudioServer;
     QTcpSocket *m_tcpAudioSocket;
     QTcpSocket *m_tcpAudioClient;
-    const int AUDIO_PORT = 28001;
+    const int AUDIO_PORT = 28002;
     QTimer* volumeTimer;
 signals:
     void micVolumeChanged(int volume);

@@ -40,9 +40,9 @@ NetworkEngine::NetworkEngine(QObject *parent)
     qDebug() << "@@@ NetworkEngine::NetworkEngine 1";
 
 #ifndef Q_OS_ANDROID1
-    // UDP-приемник на порту 28000 инициализируется и слушает сеть ТОЛЬКО на Windows
+    // UDP-приемник на порту 28001 инициализируется и слушает сеть ТОЛЬКО на Windows
     udpSocket = new QUdpSocket(this);
-    if (udpSocket->bind(QHostAddress::AnyIPv4, 28000, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+    if (udpSocket->bind(QHostAddress::AnyIPv4, 28001, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
         connect(udpSocket, &QUdpSocket::readyRead, this, &NetworkEngine::onReadyUdpRead);
         qDebug() << "@@@ СЕТЬ C++: Приемник Discovery успешно запущен на порту 28000 (Платформа без Android)";
     }
@@ -103,10 +103,20 @@ NetworkEngine::~NetworkEngine() {
     }
 }
 void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
+    if (m_users.isEmpty()) return;
+    QByteArray data = getCallData(netType);
+    qDebug() << "@@@@@@@@@@@@@NetworkEngine::sendCall to" << name;
+    //   qDebug() << "callip=" << callIp << udpSocket << QHostAddress(callIp);
+    //    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
+    //    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
+    //    udpSocket->reset();
+    //    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), PORT);
+    //udpSocket->flush();
+    //    qDebug() << "@@@ Send" << nb << "bytes";
+    m_ringbackTone->play();
     QTcpSocket *socket = new QTcpSocket();
     if (m_users.isEmpty()) return;
     QString targetIp;
-    QByteArray data = getCallData(netType);
     for (int i =1; i<m_users.count(); i++)
         if (m_users[i].name == name)
         {
@@ -237,19 +247,21 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         }
         callInfo.netType = obj["net_type"].toInt();
         callInfo.ip = senderIpStr;
+        if (callInfo.ip.startsWith("::ffff:"))
+            callInfo.ip.remove("::ffff:");
+
         callInfo.name = name;
         incomingCall();
     }
     else if (type == "accept_call") {
         m_ringbackTone->stop();
         callInfo.setState(CallInfo::speaking);
-        audioEngine->startRecording(m_activePeerIp);
+        audioEngine->startRecording(callInfo.ip);
         emit callAccepted();
     }
     else if (type == "line_busy") {
         m_ringbackTone->stop();
         m_busyTone->play();
-        m_activePeerIp = "";
         callInfo.setState(CallInfo::idle);
         emit callStopped();
     }
@@ -258,7 +270,6 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         m_incomingRing->stop();
         m_busyTone->stop();
         audioEngine->stop();
-        m_activePeerIp = "";
         callInfo.setState(CallInfo::idle);
         emit callStopped();
     }
@@ -272,16 +283,16 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
 }
 void NetworkEngine::startAudioCall(const QString &targetPeerName, int netType) {
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() для:" << targetPeerName;
-    sendCall (targetPeerName, netType);
-    return;
-#if 0
+    callInfo.setState(CallInfo::outCalling);
+    if (targetPeerName != "Анфиса")
+        sendCallByTcp(targetPeerName, netType);
+
     QString targetIp = "";
-    QList<UserInfo> updatedPeers = loadPeersFromConfig();
     qDebug() << "startAudioCall()" << "@@@ СЕТЬ C++: Вызов () 1 для:" << targetPeerName;
 
-    for (const UserInfo &peer : updatedPeers) {
-        if (peer.name == targetPeerName) {
-            targetIp = peer.ip[0];
+    for (int i =1; i< m_users.count(); i++) {
+        if (m_users[i].name == targetPeerName) {
+            targetIp = m_users[i].ip[netType];
             break;
         }
     }
@@ -293,8 +304,8 @@ void NetworkEngine::startAudioCall(const QString &targetPeerName, int netType) {
         return;
     }
 
-    m_activePeerIp = targetIp;
-    m_activeCallNetType = netType;
+    callInfo.ip = targetIp;
+//    m_activeCallNetType = netType;
 
     QJsonObject obj;
     obj["type"] = "incoming_call";
@@ -326,7 +337,6 @@ void NetworkEngine::startAudioCall(const QString &targetPeerName, int netType) {
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 5 для:" << targetPeerName;
 
     m_ringbackTone->play();
-#endif
 }
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) {
     if (m_users.isEmpty()) return;
@@ -352,7 +362,7 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     }
 
 
-    audioEngine->startRecording(m_activePeerIp);
+    audioEngine->startRecording(callInfo.ip);
 }
 
 void NetworkEngine::stopAudioCall() {
@@ -363,11 +373,11 @@ void NetworkEngine::stopAudioCall() {
     obj["name"] = me.name;
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
-    QString targetIp = m_activePeerIp;
+    QString targetIp = callInfo.ip;
     if (targetIp.startsWith("::ffff:")) {
         targetIp.remove("::ffff:");
     }
-
+    qDebug() << "@@@Stop Call ip=" << targetIp << "data=" << data;
     if (!targetIp.isEmpty() && tcpSocket) {
         tcpSocket->abort();
         tcpSocket->connectToHost(targetIp, PORT);
@@ -388,6 +398,9 @@ void NetworkEngine::stopAudioCall() {
 }
 
 void NetworkEngine::readConfig() {
+    qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
+    qint64 dt = currMsec - lastReadConfigTime;
+    lastReadConfigTime = currMsec;
     if (m_users.isEmpty()) return;
     QString fName = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
     QFile file(fName);
@@ -398,12 +411,16 @@ void NetworkEngine::readConfig() {
 
     QByteArray data = file.readAll();
     file.close();
+    qDebug() << "@@@ read config " << QString(data);
+    if (dt >=0 && dt <=5000)
+        return;
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull() || !doc.isObject()) {
         m_users[0].name = "Пользователь";
         return;
     }
+    qDebug() << "@@@ read config 2";
 
     QJsonObject rootObj = doc.object();
 
@@ -413,13 +430,17 @@ void NetworkEngine::readConfig() {
     } else {
         m_users[0].name = "Пользователь";
     }
+    qDebug() << "@@@ read config 3";
 
     // 2. Восстанавливаем кэшированных друзей (Петра, Марью и т.д.)
     if (rootObj.contains("peers") && rootObj["peers"].isArray()) {
+        qDebug() << "@@@ read config 3.1";
+
         QJsonArray peersArray = rootObj["peers"].toArray();
         for (int i = 0; i < peersArray.size(); ++i) {
             QJsonObject peerObj = peersArray.at(i).toObject();
             QString peerName = peerObj["name"].toString();
+            qDebug() << "@@@ read config 3.2";
 
             if (peerName.isEmpty() || peerName == m_users.at(0).name) continue;
 
@@ -431,19 +452,26 @@ void NetworkEngine::readConfig() {
                     break;
                 }
             }
+            qDebug() << "@@@ read config 3.3";
 
             if (!exists) {
                 UserInfo savedUser;
+                qDebug() << "@@@ read config 3.4";
                 savedUser.name = peerName;
 //                savedUser.isAlive = false; // Они пока оффлайн, но в списке Петр ПОЯВИТСЯ!
                 savedUser.isAlive = peerObj["isAlive"].toBool();
-                savedUser.ip[0] = peerObj["ip0"].toString();
-                savedUser.ip[1] = peerObj["ip1"].toString();
-                savedUser.ip[2] = peerObj["ip2"].toString();
+                QJsonArray ipArr = peerObj["ip"].toArray();
+                qDebug() << "@@@ read config 3.5";
+                for (int i =0; i< 3; i++)
+                savedUser.ip[i] = ipArr[i].toString();
                 m_users.append(savedUser);
+                qDebug() << "@@@ read config 3.6";
+
             }
         }
     }
+    qDebug() << "@@@ read config 4" ;
+
     if (rootObj.contains("lastCall"))
         {
         QJsonObject callObj = rootObj["lastCall"].toObject();
@@ -468,11 +496,22 @@ void NetworkEngine::readConfig() {
         QTimer::singleShot(1000, []() {
             netEngine->incomingCall();
         });
-}
+        }
+        else {
+            QDateTime tfile, tnow;
+            tfile.setMSecsSinceEpoch(msec);
+            tnow.setMSecsSinceEpoch(msec);
+            qDebug() << "tfile,tnow=" << tfile << tnow;
+
+        }
         }
         else
+    {
             qDebug() << "@@@  lastCall too old";
+        }
+        qDebug() << "@@@ read config 5";
         rootObj.remove("lastCall");
+        qDebug() << "@@@ read config 6" ;
         QFile writeFile(fName);
         if (writeFile.open(QIODevice::WriteOnly)) {
             QJsonDocument doc(rootObj);
@@ -483,6 +522,8 @@ void NetworkEngine::readConfig() {
         qDebug() << "@@@  lastCall=0";
     }
     emit peerListChanged();
+    qDebug() << "@@@ read config exit";
+
 }
 void NetworkEngine::saveNameToFile(const QString &name) {
     if (m_users.isEmpty()) return;
@@ -565,8 +606,9 @@ void NetworkEngine::incomingCall()
 {
     qDebug() << "@@@  incoming call 2" ;
     m_incomingRing->play();
-    emit incomingCall(callInfo.name, callInfo.netType);
-
+    callInfo.setState(CallInfo::inCalling);
+    emit setNetType(callInfo.netType);
+    emit incomingCall(callInfo.name,callInfo.netType);
 }
 
 void NetworkEngine::reject(const QString &ip)
@@ -651,22 +693,6 @@ QByteArray NetworkEngine::getCallData(int netType)
     return data;
 }
 
-void NetworkEngine::sendCall(const QString& abonent, int netType) {
-    if (m_users.isEmpty()) return;
-    QByteArray data = getCallData(netType);
-    qDebug() << "@@@@@@@@@@@@@NetworkEngine::sendCall to" << abonent;
- //   qDebug() << "callip=" << callIp << udpSocket << QHostAddress(callIp);
-//    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
-//    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
-//    udpSocket->reset();
-//    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), PORT);
-    //udpSocket->flush();
-//    qDebug() << "@@@ Send" << nb << "bytes";
-    m_ringbackTone->play();
-    sendCallByTcp(abonent, netType) ;
-
-}
-
 #ifndef Q_OS_ANDROID
 void NetworkEngine::sendDiscovery() {
     if (m_users.isEmpty()) return;
@@ -682,7 +708,7 @@ void NetworkEngine::sendDiscovery() {
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 //    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("192.168.0.255"), PORT);
 
-    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), PORT);
+    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), 28001);
 //    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("192.168.43.255"), PORT);
 //    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("192.168.137.255"), PORT);
     qDebug() << QTime::currentTime() << "@@@ sendDiscovery" << nb << "bytes";
@@ -695,11 +721,15 @@ void NetworkEngine::updateInterfaces() {
     m_users[0].ip[1] = "";
     m_users[0].ip[2] = "";
     QList<QHostAddress> list = QNetworkInterface::allAddresses();
+    qDebug() << "@@@ Alladdreses=" << list;
     for (int i = 0; i < list.count(); i++) {
         if (!list[i].isLoopback() && list[i].protocol() == QAbstractSocket::IPv4Protocol) {
             QString ip = list[i].toString();
+            qDebug() << "@@@Interface[" << i << "]=" << ip;
             if (ip.startsWith("192.168.49.")) m_users[0].ip[2] = ip;
-            else if (ip.startsWith("192.168.43.") || ip.startsWith("192.168.137.")) m_users[0].ip[1] = ip;
+            else if (ip.startsWith("192.168.43.") ||
+                     ip.startsWith("192.168.137.") ||
+                     ip.startsWith("10.")) m_users[0].ip[1] = ip;
             else m_users[0].ip[0] = ip;
         }
     }
@@ -724,7 +754,10 @@ void NetworkEngine::onReadyTcpRead() {
     //QString sdata = data1;
     //QByteArray data(sdata.toUtf8());
     qDebug() << "@@@NetworkEngine::onReadyTcpRead() 2" << QString(data);
-    parseIncomingSyncData(data, senderSocket->peerAddress().toString());
+    QString ip = senderSocket->peerAddress().toString().toLower();
+    if (ip.startsWith("::ffff:"))
+        ip.remove("::ffff:");
+    parseIncomingSyncData(data, ip);
 }
 
 void NetworkEngine::onReadyUdpRead() {
@@ -741,6 +774,7 @@ void NetworkEngine::onReadyUdpRead() {
 }
 #ifdef Q_OS_ANDROID
 void NetworkEngine::m_unixStartServer() {
+    return;
     if (m_unixServer)
         delete m_unixServer;
     m_unixServer = new QLocalServer(this);
@@ -810,8 +844,9 @@ void NetworkEngine::m_unixSendAlivePing() {
 }
 #endif
 void NetworkEngine::debugUsers() {
+    updateInterfaces();
     for (int i = 0; i < m_users.size(); ++i) {
-        qDebug() << "User:" << m_users[i].name << "LAN:"
+        qDebug() << "@@@ User:" << m_users[i].name << "LAN:"
             << m_users[i].ip[0]
             << "AP:" << m_users[i].ip[1] << "Direct:"
             << m_users[i].ip[2] << "Alive:" << m_users[i].isAlive;
@@ -844,9 +879,8 @@ QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
                 if (!name.isEmpty() && !ip0.isEmpty()) {
                     UserInfo u;
                     u.name = name;
-                    u.ip[0] = ip0;
-                    u.ip[1] = ipArr[1].toString();
-                    u.ip[2] = ipArr[2].toString();
+                    for (int i =0; i< 3; i++)
+                    u.ip[i] = ipArr[i].toString();
                     u.isAlive = true;
                     activeUsers.append(u);
                     qDebug() << "@@@ " << "u=" << u.name;
@@ -904,17 +938,20 @@ void NetworkEngine::refreshPeersForUi() {
 void CallInfo::setState(State _state)
 {
     state = _state;
-    if (!busy())
-        netEngine->unpressCallButtons();
-    else {
-        netEngine->pressCallButon(netEngine->callInfo.netType);
-    }
 }
 void NetworkEngine::unpressCallButtons()
 {
     emit callStopped();
+    callInfo.netType = -1;
 }
-void NetworkEngine::pressCallButon(int _netType)
+void NetworkEngine::setNetType(int _netType)
 {
-    emit callPressed(_netType);
+    callInfo.netType = _netType;
+    emit setActiveNetType(_netType);
+}
+
+
+bool NetworkEngine::activeNetType()
+{
+    return callInfo.netType;
 }

@@ -50,11 +50,7 @@ ApplicationWindow {
             })
         }
         function onIncomingCall(peerName, netType) {
-            if (window.activeCallNetType !== -1) {
-                netEngine.stopAudioCall()
-                return
-            }
-            incomingCallDialog.callerName = peerName
+           incomingCallDialog.callerName = peerName
             incomingCallDialog.callNetType = netType
             incomingCallDialog.open()
         }
@@ -78,7 +74,7 @@ ApplicationWindow {
          function onNetVolumeUpdated(volume) {
              netIndicatorText.text = "🔊 " + volume + "%"
          }
-         function onCallPressed(_netType) {
+         function onSetActiveNetType(_netType) {
             window.activeCallNetType = _netType
          }
     }
@@ -236,7 +232,7 @@ ApplicationWindow {
                     onClicked: {
                         if (window.activeCallNetType === 0) {
                             netEngine.stopAudioCall()
-                        } else {
+                        } else if  (window.activeCallNetType === -1) {
                             while (callLanMenu.count > 0) {
                                 var item = callLanMenu.takeItem(0)
                                 if (item) item.destroy()
@@ -286,7 +282,7 @@ ApplicationWindow {
                     onClicked: {
                         if (window.activeCallNetType === 1) {
                             netEngine.stopAudioCall()
-                        } else {
+                        } else  if  (window.activeCallNetType === -1){
                             while (callApMenu.count > 0) {
                                 var item = callApMenu.takeItem(0)
                                 if (item) item.destroy()
@@ -335,7 +331,8 @@ ApplicationWindow {
                     onClicked: {
                         if (window.activeCallNetType === 2) {
                             netEngine.stopAudioCall()
-                        } else {
+                        } else  if  (window.activeCallNetType === -1){
+
                             while (callDirectMenu.count > 0) {
                                 var item = callDirectMenu.takeItem(0)
                                 if (item) item.destroy()

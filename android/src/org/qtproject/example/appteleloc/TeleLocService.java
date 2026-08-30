@@ -429,7 +429,7 @@ public void onCreate() {
                     String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255"};
                     for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
-                        java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28000);
+                        java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28001);
                         socket.send(packet);
                     }
                     //Log.d(TAG, "@@@  SendDiscovery 4");
@@ -450,7 +450,7 @@ public void onCreate() {
                                 String pIp = peer.optString("ip0");
                                 if (pIp != null && !pIp.isEmpty()) {
                                     java.net.InetAddress addr = java.net.InetAddress.getByName(pIp);
-                                    java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28000);
+                                    java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28001);
                                     socket.send(packet);
                                 }
                             }
@@ -624,7 +624,7 @@ public void saveCall(String name, String ip, int netType) {
 		Log.d(TAG, "@@@ saveCall" + jcall);
 		configObj.put("lastCall", jcall);
 		String s = configObj.toString(); 
-		Log.d(TAG, "@@@ s=" +s);
+		Log.d(TAG, "@@@ Call saved=" +s);
         java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
         fos.write(configObj.toString().getBytes("UTF-8"));
         fos.close();
@@ -639,10 +639,10 @@ private void startUdpReceiver() {
         @Override
         public void run() {
             try {
-                java.net.DatagramSocket socket = new java.net.DatagramSocket(28000);
+                java.net.DatagramSocket socket = new java.net.DatagramSocket(28001);
                 socket.setReuseAddress(true);
                 byte[] buffer = new byte[4096];
-                Log.d(TAG, "@@@ JAVA СЛУЖБА: UDP Приемник Discovery запущен на порту 28000");
+                Log.d(TAG, "@@@ JAVA СЛУЖБА: UDP Приемник Discovery запущен на порту 28001");
 
                 while (m_isRunning) {
                     java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
@@ -726,7 +726,7 @@ private void updatePeerInConfig(String name, String ip) {
                 break;
             }
         }
-Log.d(TAG, "@@@ name=" + name + " IP=" + ip + " found=" + found);
+// s.d(TAG, "@@@ name=" + name + " IP=" + ip + " found=" + found);
         if (!found) {
             org.json.JSONObject newPeer = new org.json.JSONObject();
             newPeer.put("name", name);

@@ -54,6 +54,7 @@ public:
     void debugMsg(const QString& s);
     void unpressCallButtons();
     void pressCallButon(int _netType);
+    Q_INVOKABLE bool activeNetType();
     CallInfo callInfo;
 
     QByteArray getCallData(int netType);
@@ -68,6 +69,7 @@ signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
     void usersModelChanged();
+    void setActiveNetType(int _netType);
 
 private slots:
     void onNewConnection();
@@ -92,7 +94,6 @@ private:
     AudioEngine *audioEngine;
 
     QVector<UserInfo> m_users;
-    QString m_activePeerIp;
     const int PORT = 28000;
 
     QSoundEffect *m_ringbackTone;
@@ -102,6 +103,7 @@ private:
     void incomingCall();
     void reject(const QString & ip);
     void rejectBusy(const QString & ip);
+    qint64 lastReadConfigTime = 0;
 #ifdef Q_OS_ANDROID
     QLocalServer* m_unixServer = 0;
     QLocalSocket* m_unixClientSocket;
@@ -119,6 +121,7 @@ private:
             return m_users[0].ip[netType];
     }
     void sendCallByTcp(const QString &name, int netType);
+    void setNetType(int _netType);
 };
 
 #endif // NETWORKENGINE_H
