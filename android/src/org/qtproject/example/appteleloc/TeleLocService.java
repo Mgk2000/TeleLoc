@@ -1,4 +1,8 @@
 package org.qtproject.example.appTeleLoc;
+import android.app.Activity;
+import android.app.KeyguardManager;
+import android.os.Bundle;
+import android.view.WindowManager;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -16,11 +20,29 @@ import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.io.InputStream;
-
+import java.util.Enumeration;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.io.OutputStream;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+
 public class TeleLocService extends Service {
+       private static TeleLocService instance = null;
+
+       public static TeleLocService getInstance() {
+           return instance;
+       }
+	private class UserInfo {
+		String name = "";
+                String[] ip = {"", "", ""};
+		boolean isAlive;
+	}
+        private List<UserInfo> users = new ArrayList<>();
     private static final String TAG = "TeleLocService";
     private static final String CHANNEL_ID_SILENT = "TeleLocSilentChannel";
     private static final String CHANNEL_ID_VOIP = "TeleLocVoipChannel";
@@ -36,9 +58,83 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
     private LocalSocket clientSocket = null;
     private boolean isConnected = false;
     private boolean isRunning = false;
-        private int TCP_PORT = 28501;
-	 private ServerSocket serverSocket;
-	 private Thread serverThread;
+    private int TCP_PORT = 28501;
+    private ServerSocket serverSocket;
+    private Thread serverThread;
+    String configPath = "";
+    org.json.JSONObject lastCall = null;
+    long lastCallTime = 0;
+// Нативный метод принимает первым аргументом экземпляр сервиса
+// Измените тип первого аргумента на базовый Object.
+// Для JNI это снимет необходимость искать сложную сигнатуру класса.
+public static native void sendDataToCpp(Object serviceObj, int eventId, String phoneNumber);
+//sendDataToCpp(this, 101, "{\"status\":\"ringing\"}");
+//public void executeCommandFromCpp(int commandId, String payload);
+private void createMyUser(){
+Log.d(TAG, "@@@exc createMyUser() 1");
+if (users.size() !=0) return;
+Log.d(TAG, "@@@exc createMyUser() 2");
+    UserInfo u = new UserInfo();
+    u.name = "Malamu";
+    u.isAlive = true;
+
+    for (int i =0; i<3; i++)
+        u.ip[i] = getLocalIpAddress(i);
+    users.add(u);
+    Log.d(TAG, "@@@exc createMyUser() 3");
+}
+private void checkLastCallTime()
+{
+    if (lastCall == null)
+    return;
+    if (System.currentTimeMillis() - lastCallTime> 60000)
+            lastCall = null;
+}
+private void readConfig() {
+	 try{
+
+           java.io.File file = new java.io.File(configPath);
+           Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
+           if (file.exists()) {
+                java.io.FileInputStream fis = new java.io.FileInputStream(file);
+                byte[] data = new byte[(int) file.length()];
+                fis.read(data);
+                fis.close();
+                org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
+                createMyUser();
+                org.json.JSONObject myPeer = configObj.getJSONObject("myPeer");
+                users.get(0).name = myPeer.optString("name");
+                users.get(0).isAlive = true;
+                org.json.JSONArray ipArr = myPeer.getJSONArray("ip");
+                for (int i = 0; i <3; i++)
+                    users.get(0).ip[i] = ipArr.getString(i);
+                lastCall = configObj.getJSONObject("lastCall");
+            }
+         else
+    		Log.d(TAG, "@@@conf config not exists");
+
+	 }
+
+        catch (Exception e) {
+        Log.d(TAG, "@@@readConfig" + e.getMessage());
+        e.printStackTrace();
+
+		}
+	 }
+public void executeCommandFromCpp(int commandId, String param) {
+         // Логика выполнения команды внутри сервиса (например, сбросить звонок)
+         System.out.println("@@@exc Java получил команду: " + commandId + " с данными: " + param);
+         switch (commandId)
+         {
+            case  0:
+             setName(param);
+             break;
+             case 1:
+            lastCall = null;
+            break;
+            default: break;
+            }
+     }
  private void listenForCalls() {
         try {
             serverSocket = new ServerSocket(TCP_PORT);
@@ -87,7 +183,8 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
                 clientSocket.close();
             }
         } catch (Exception e) {
-            e.printStackTrace();
+        e.printStackTrace();
+
         }
     }
 
@@ -134,7 +231,7 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
                     try {
                         Log.d(TAG, "@@@ startConnectionLoop() 4 atempts" +  attempts);
 
-                        clientSocket = new LocalSocket();
+                clientSocket = new LocalSocket();
                         clientSocket.connect(address);
                          Log.d(TAG, "@@@ startConnectionLoop() 5 isConnecte = true" );
                         // Если строка выше не выбросила Exception — мы успешно подключились!
@@ -189,6 +286,8 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "@@@ Соединение разорвано: " + e.getMessage());
+                    e.printStackTrace();
+
                     isConnected = false;
                 }
             }
@@ -265,12 +364,22 @@ public  void sendToQtViaUnixSocket(final String message) {
  @Override
 public void onCreate() {
     super.onCreate();
-    Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов onCreate()");
+    instance = this;
+//    System.loadLibrary("appTeleLoc");
+    Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 1");
 
     m_isRunning = true;
 
     try {
-		Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить WifiManageк"); 
+        Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 2");
+        configPath = QStandardPaths_writableLocation();
+        readConfig();
+        Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 3");
+
+        createMyUser();
+        Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 4");
+
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить WifiManageк");
         android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
 				Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManageк получен"); 
 
@@ -279,7 +388,7 @@ public void onCreate() {
             m_multicastLock = wm.createMulticastLock("TeleLoc:MulticastLock");
             m_multicastLock.acquire();
             Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock успешно получен.");
-        startConnectionLoop();
+			startConnectionLoop();
 			Log.d(TAG, "@@@ startConnectionLoop.");
         }
 		else
@@ -307,7 +416,12 @@ public void onCreate() {
 }
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов onStartCommand()");
+        Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onStartCommand()");
+        String jsonWithCallData = "{\"number\":\"+79991112233\"}";
+
+           // Передаем ТЕКУЩИЙ живой экземпляр (this) в C++
+ //          sendDataToCpp(this, 101, jsonWithCallData);
+
         return START_STICKY;
     }
 
@@ -378,93 +492,87 @@ public void onCreate() {
 
         return builder.build();
     }
+private void setName(String name)
+{
+    users.subList(1, users.size()).clear();
+    users.get(0).name = name;
+    saveConfig();
 
+}
  public int cnt=0;
  private void startSendDiscovery() {
     new Thread(new Runnable() {
         @Override
         public void run() {
                 cnt++;
-                Log.d(TAG, "@@@ сnt=" + cnt);
+                int us = users.size();
+                Log.d(TAG, "@@@ssd users=" +us );
                while (m_isRunning) {
                 try {
+                    //if (us <=0 || users.get(0).name.equals(""))
+                    //return;
                     Thread.sleep(3000);
-                    //Log.d(TAG, "@@@  SendDiscovery 0    ");
-                    String myName = "Неизвестный";
+                    Log.d(TAG, "@@@exc  SendDiscovery 0    ");
                     String configPath = QStandardPaths_writableLocation();
                     java.io.File file = new java.io.File(configPath);
+                    String myName = users.get(0).name;
+                    Log.d(TAG,"@@@sss config="+ configPath+"exists="+file.exists()) ;
                     if (file.exists()) {
                         java.io.FileInputStream fis = new java.io.FileInputStream(file);
                         byte[] data = new byte[(int) file.length()];
                         fis.read(data);
                         fis.close();
+                        Log.d(TAG, "@@@ssd data=" + data + data.length);
+                        if (data.length <=0)
+                        return;
                         org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
-                        String savedName = configObj.optString("my_name");
-                        if (savedName != null && !savedName.isEmpty()) {
-                            myName = savedName;
-                        }
                     }
-                    //Log.d(TAG, "@@@  SendDiscovery 1");
-                    String myIp = getLocalIpAddress();
-//                    String json = "{\"type\":\"discovery1\",\"name\":\"" + myName + "\",\"ip0\":\"" + myIp + "\",\"ip1\":\"\",\"ip2\":\"\"}";
-					org.json.JSONObject jDiscovery = new org.json.JSONObject();
-					jDiscovery.put("type", "discovery");
-					jDiscovery.put("name", myName);
-					jDiscovery.put("fromservice", true);
-					org.json.JSONArray ipArr = new org.json.JSONArray();
-					ipArr.put(myIp);
-					ipArr.put("6.6.6.6");
-					ipArr.put("");
-					jDiscovery.put("ip",ipArr);
-                    String json = jDiscovery.toString();
+                org.json.JSONObject jDiscovery = new org.json.JSONObject();
+                jDiscovery.put("type", "discovery");
+                jDiscovery.put("name", users.get(0).name);
+                jDiscovery.put("fromservice", true);
+                org.json.JSONArray ipArr = new org.json.JSONArray();
+                String sip =  getLocalIpAddress(0);
+                ipArr.put(sip);
+                ipArr.put(getLocalIpAddress(1));
+                ipArr.put(getLocalIpAddress(2));
+                jDiscovery.put("ip",ipArr);
+                String json = jDiscovery.toString();
                     //Log.d(TAG, "@@@  SendDiscovery 2");
 
-                    byte[] bytes = json.getBytes("UTF-8");
-                    java.net.DatagramSocket socket = new java.net.DatagramSocket();
-
-                    socket.setBroadcast(true);
-
-                    //Log.d(TAG, "@@@  SendDiscovery 3");
-
-                    String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255"};
-                    for (String ip : ips) {
+                byte[] bytes = json.getBytes("UTF-8");
+                java.net.DatagramSocket socket = new java.net.DatagramSocket();
+                socket.setBroadcast(true);
+                 Log.d(TAG, "@@@  SendDiscovery 3 " + json);
+                 String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
+                 for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
                         java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28001);
                         socket.send(packet);
                     }
-                    //Log.d(TAG, "@@@  SendDiscovery 4");
-                    if (cnt < 2000000000)
-                    continue;
-                    if (file.exists()) {
-                        java.io.FileInputStream fis = new java.io.FileInputStream(file);
-                        byte[] data = new byte[(int) file.length()];
-                        fis.read(data);
-                        fis.close();
-                        //Log.d(TAG, "@@@  SendDiscovery 5");
+                //Log.d(TAG, "@@@  SendDiscovery 4");
+                Thread.sleep(30000);
+                Log.d(TAG, "@@@exc  before send instance to cpp");
+                sendDataToCpp(TeleLocService.this, 0,usersToString());
 
-                        org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
-                        org.json.JSONArray peers = configObj.optJSONArray("peers");
-                        if (peers != null) {
-                            for (int i = 0; i < peers.length(); i++) {
-                                org.json.JSONObject peer = peers.getJSONObject(i);
-                                String pIp = peer.optString("ip0");
-                                if (pIp != null && !pIp.isEmpty()) {
-                                    java.net.InetAddress addr = java.net.InetAddress.getByName(pIp);
-                                    java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28001);
-                                    socket.send(packet);
-                                }
-                            }
-                        }
-                    }
-                    //L//og.d(TAG, "@@@  SendDiscovery 6");
-
-                    socket.close();
-                    //Log.d(TAG, "@@@ JAVA СЛУЖБА: Адресный пакет Discovery отправлен пирам.");
-                    Thread.sleep(30000);
-                } catch (Exception e) {
-                    Log.d(TAG, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ сnt=" + cnt);
-                    e.printStackTrace();
                 }
+/*            catch (Exception e) {
+                    Log.d(TAG, "@@@@@@@@@@@@@@@@@@@@ сnt=" + cnt);
+                  //  e.printStackTrace();
+                }*/
+                catch (UnsatisfiedLinkError e) {
+                           // Ловим именно ошибку линковки (когда Qt C++ еще спит)
+                           Log.w(TAG, "@@@exc Сбой: Среда Qt C++ еще не запущена. Запрос проигнорирован, краша нет.");
+
+                           // Здесь можно запустить логику пробуждения C++, если это необходимо,
+                           // либо просто сохранить пропущенный звонок в базу данных SQLite / SharedPreferences,
+                           // чтобы Qt прочитал его, когда пользователь сам откроет приложение.
+
+                       } catch (Throwable t) {
+                           // Ловим вообще любые другие системные ошибки, чтобы сервис никогда не падал
+                           Log.e(TAG, "@@@exc Неизвестная ошибка: " + t.getMessage());
+                       }
+
             }
         }
     }).start();
@@ -491,12 +599,11 @@ public void onCreate() {
             }
             clientSocket.close();
         }
-    } catch (Exception e) {}
+    } catch (Exception e) {
+    e.printStackTrace();
+
+    }
 }
-
-
-
-
     public void triggerFullScreenCall(String callStr) {
         Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callStr);
         sendToQtViaUnixSocket(callStr);
@@ -568,69 +675,164 @@ public void onCreate() {
         }
         super.onTaskRemoved(rootIntent);
     }
-private String getLocalIpAddress() {
-    try {
-        java.util.List<java.net.NetworkInterface> interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces());
-        for (java.net.NetworkInterface intf : interfaces) {
-            java.util.List<java.net.InetAddress> addrs = java.util.Collections.list(intf.getInetAddresses());
-            for (java.net.InetAddress addr : addrs) {
-                if (!addr.isLoopbackAddress()) {
-                    String sAddr = addr.getHostAddress();
-                    boolean isIPv4 = sAddr.indexOf(':') < 0;
-                    if (isIPv4) return sAddr;
+private void printIpAddresses(){
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                
+                // Skip loopback, down, or virtual interfaces
+                if (networkInterface.isLoopback() || !networkInterface.isUp() || networkInterface.isVirtual()) {
+                    continue;
+                }
+
+                Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    
+                    // Filter for a valid local IPv4 address
+                    if (address instanceof Inet4Address) {
+                        System.out.println("@@@### Interface: " + networkInterface.getDisplayName());
+                        System.out.println("@@@### Local IP Address: " + address.getHostAddress());
+                        //return; // Remove this return if you want to see all available local IPs
+                    }
                 }
             }
+        } catch (SocketException e) {
+            e.printStackTrace();
         }
-    } catch (Exception e) {
-        e.printStackTrace();
     }
+
+private String configToString(){
+    try {
+    org.json.JSONObject configObj = new org.json.JSONObject();
+    org.json.JSONObject myPeer = new org.json.JSONObject();
+    myPeer.put ("name", users.get(0).name);
+    org.json.JSONArray ips  = new org.json.JSONArray();
+    for (int i =0; i< 3; i++)
+        ips.put(users.get(0).ip[i]);
+    myPeer.put("ip", ips);
+    configObj.put("myPeer", myPeer);
+    if (lastCall != null) {
+    if (System.currentTimeMillis() - lastCallTime < 60000)
+        {
+        configObj.put("lastCall", lastCall);
+        }
+        else
+            lastCall = null;
+        }
+    return configObj.toString();
+    }
+    catch (Exception e){
+    Log.d(TAG, "configToString() error() + e.getMessage()");
+    e.printStackTrace();
     return "";
+    }
+
+}
+
+private String usersToString()
+{
+    try {
+    org.json.JSONObject configObj = new org.json.JSONObject();
+    org.json.JSONArray peers  = new org.json.JSONArray();
+    for (int i =0; i< users.size(); i++) {
+        org.json.JSONObject peer = new org.json.JSONObject();
+        peer.put("name", users.get(i).name);
+        peer.put("isAlive", users.get(i).isAlive);
+        org.json.JSONArray ipArr = new org.json.JSONArray();;
+        for (int j = 0; j<3; j++)
+            ipArr.put(users.get(i).ip[j]);
+        peer.put("ip", ipArr);
+        peers.put(peer);
+    }
+    configObj.put("peers", peers);
+    String s = configObj.toString();
+    Log.d(TAG, "@@@conf" + s);
+    return s;
+    }
+    catch (Exception e){
+    Log.d(TAG, "usersToString() error() + e.getMessage()");
+    e.printStackTrace();
+    return "";
+    }
+}
+
+private String getLocalIpAddress(int netType) {
+    try {
+                //Log.d(TAG, "@@@### getLocalIpAddress" + netType);
+        java.util.List<java.net.NetworkInterface> interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces());
+        for (java.net.NetworkInterface intf : interfaces) {
+//            java.util.List<java.net.InetAddress> addrs = java.util.Collections.list(intf.getInetAddresses());
+            java.util.List<InetAddress> addrs = java.util.Collections.list(intf.getInetAddresses());
+//            for (java.net.InetAddress addr : addrs) {
+//                if (!addr.isLoopbackAddress()) {
+	                Enumeration<InetAddress> addresses = intf.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress addr = addresses.nextElement();
+
+                    String sAddr = addr.getHostAddress();
+					Log.d(TAG, "@@@### " + sAddr);
+                                        //System.out.println("@@@### sAddr 1 =" + addr.getHostAddress() +" " + sAddr);
+
+					sAddr = sAddr.replace("::ffff:" , "");
+                                        //System.out.println("@@@### sAddr 2 =" + sAddr);
+					if (sAddr.startsWith("192.168.49.")) {
+						if (netType == 2) return sAddr; else return "";
+					}
+					else if (sAddr.startsWith("192.168.43.") ||  sAddr.startsWith("192.168.137.")) {
+						if (netType == 1) return sAddr; else return "";
+					}
+					else if (sAddr.startsWith("192.168.") && netType == 0)
+					{
+                                                //Log.d(TAG, "@@@### --return " +sAddr + "-------------------------------------");
+                       return sAddr;
+					}
+					//else return "";
+                }
+            }
+		return "";
+    }
+    catch (Exception e) {
+        e.printStackTrace();
+		return "";
+    }
 }
     private String QStandardPaths_writableLocation() {
         return getFilesDir().getParent() + "/files/teleloc.conf";
     }
-private void saveConfigToFile(org.json.JSONObject configObj) {
+private void saveConfig()      {
     try {
+
         String configPath = QStandardPaths_writableLocation();
         java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
-        fos.write(configObj.toString().getBytes("UTF-8"));
+        String s = configToString();
+        fos.write(s.getBytes("UTF-8"));
         fos.close();
         //Log.d(TAG, "@@@ JAVA СЛУЖБА: Конфиг успешно обновлен на диске.");
     } catch (Exception e) {
-        e.printStackTrace();
+
+    Log.d(TAG, "@@@saveConfig" + e.getMessage());
+    e.printStackTrace();
     }
 }
 public void saveCall(String name, String ip, int netType) {
  try{
 	Log.d(TAG, "@@@saveCall (" + name + ip +netType);
-        String configPath = QStandardPaths_writableLocation();
-        java.io.File file = new java.io.File(configPath);
-        org.json.JSONObject configObj = null;
-        
-        if (file.exists() && file.length() > 0) {
-            java.io.FileInputStream fis = new java.io.FileInputStream(file);
-            byte[] data = new byte[(int) file.length()];
-            fis.read(data);
-            fis.close();
-            configObj = new org.json.JSONObject(new String(data, "UTF-8"));
-        } else {
-            configObj = new org.json.JSONObject();
-        }
-		org.json.JSONObject jcall = new org.json.JSONObject();
-		jcall.put("name", name);
-		jcall.put("ip", ip);
-		jcall.put("netType", netType);
-		jcall.put("time",System.currentTimeMillis());
-		Log.d(TAG, "@@@ saveCall" + jcall);
-		configObj.put("lastCall", jcall);
-		String s = configObj.toString(); 
-		Log.d(TAG, "@@@ Call saved=" +s);
-        java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
-        fos.write(configObj.toString().getBytes("UTF-8"));
-        fos.close();
- }
- catch (Exception e) {
+        lastCall = new org.json.JSONObject();
+        lastCall.put("name", name);
+        lastCall.put("ip", ip);
+        lastCall.put("netType", netType);
+        lastCall.put("time",System.currentTimeMillis());
+        lastCallTime = System.currentTimeMillis();
+        Log.d(TAG, "@@@ saveCall" + lastCall);
+        String s = lastCall.toString();
+        Log.d(TAG, "@@@ Call saved=" +s);
+        saveConfig();
+    }
+    catch (Exception e) {
         e.printStackTrace();
+
     }
 
 }
@@ -649,7 +851,7 @@ private void startUdpReceiver() {
                     socket.receive(packet);
                     
                     String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8").trim();
-                    //Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message);
+                    Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
 
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
@@ -657,13 +859,14 @@ private void startUdpReceiver() {
                         String pName = obj.optString("name");
 						int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
-						//Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
+						Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
                         if ("discovery".equals(stype)) 
                         {
                             
-                            if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
-                                //Log.d(TAG, "@@@ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
-                                updatePeerInConfig(pName, pIp);
+                            Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
+							if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
+                                Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
+                                updatePeer(pName, pIp);
                             }
 						}
 						else
@@ -694,59 +897,69 @@ private void startUdpReceiver() {
         }
     }).start();
 }
-private void updatePeerInConfig(String name, String ip) {
-    try {
-        String configPath = QStandardPaths_writableLocation();
-        java.io.File file = new java.io.File(configPath);
-        org.json.JSONObject configObj = null;
-        
-        if (file.exists() && file.length() > 0) {
-            java.io.FileInputStream fis = new java.io.FileInputStream(file);
-            byte[] data = new byte[(int) file.length()];
-            fis.read(data);
-            fis.close();
-            configObj = new org.json.JSONObject(new String(data, "UTF-8"));
-        } else {
-            configObj = new org.json.JSONObject();
-        }
-
-        org.json.JSONArray peers = configObj.optJSONArray("peers");
-        if (peers == null) {
-            peers = new org.json.JSONArray();
-            configObj.put("peers", peers);
-        }
-
-        boolean found = false;
-        for (int i = 0; i < peers.length(); i++) {
-            org.json.JSONObject peer = peers.getJSONObject(i);
-            if (name.equals(peer.optString("name"))) {
-                peer.put("ip0", ip);
-                peer.put("isAlive", true); // ИСПРАВЛЕНО: обновляем флаг активности
-                found = true;
-                break;
-            }
-        }
-// s.d(TAG, "@@@ name=" + name + " IP=" + ip + " found=" + found);
-        if (!found) {
-            org.json.JSONObject newPeer = new org.json.JSONObject();
-            newPeer.put("name", name);
-            org.json.JSONArray ips = new  org.json.JSONArray();
-            ips.put(ip);
-            ips.put("");
-            ips.put("");
-            newPeer.put("ip", ips);
-            newPeer.put("isAlive", true); // ИСПРАВЛЕНО: выставляем флаг при создании
-            peers.put(newPeer);
-        }
-
-        java.io.FileOutputStream fos = new java.io.FileOutputStream(file);
-        fos.write(configObj.toString().getBytes("UTF-8"));
-        fos.close();
-        //Log.d(TAG, "@@@ JAVA СЛУЖБА: Конфиг успешно перезаписан. Пир " + name + " добавлен/обновлен.");
-    } catch (Exception e) {
-        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА внутри updatePeerInConfig: " + e.getMessage());
-        e.printStackTrace();
-    }
+private void debugUser(UserInfo u, String prefix){
+Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
+ + "ip[1]=" + u.ip[1] + "ip[2]=" + u.ip[2] + "isAlive=" + u.isAlive);
 }
+
+private void updatePeer(String name, String sip) {
+Log.d(TAG, "@@@updatePeer 0");
+try {
+    if (users.size() ==0) return;
+    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
+    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
+        String[] ip = new String[3];
+        org.json.JSONArray ipArr = new org.json.JSONArray(sip);
+        for (int i =0; i< 3; i++)
+            ip[i] = ipArr.getString(i);
+            Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
+            Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
+            Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
+      //  List<String> ip = new ArrayList<>();
+        if (users.size() > 0 &&  name.equals(users.get(0).name)){
+    Log.d(TAG, "@@@updatePeer 2");
+    for (int i =0; i< 3; i++)
+                users.get(0).ip[i] = ip[i];
+                saveConfig();
+                return;
+        }
+        Log.d(TAG, "@@@updatePeer 3");
+        for (int i =1; i< users.size(); i++)
+            if (users.get(i).name.equals(name)){
+            Log.d(TAG, "@@@updatePeer 4 user[" + i + "] ips=" + users.get(i).ip.length);
+
+//for (int j =0; j< 3; i++)
+users.get(i).ip[0] = ip[0];
+users.get(i).ip[1] = ip[1];
+users.get(i).ip[2] = ip[2];
+                users.get(i).isAlive = true;
+                return;
+            }
+            else if (ip[0].equals("") && users.get(i).ip[0].equals(ip[0])) {
+            Log.d(TAG, "@@@updatePeer 5");
+
+                users.get(i).name = name;
+                users.get(i).ip[1] = ip[1];
+                users.get(i).ip[2] = ip[2];
+                users.get(i).isAlive = true;
+                return;
+                }
+                Log.d(TAG, "@@@updatePeer 6");
+
+        UserInfo u = new UserInfo();
+        u.ip = new String[3];
+
+        for (int i =0; i< 3; i++)
+            u.ip[i] = ip[i];
+        u.isAlive = true;
+        u.name = name;
+        users.add(u);
+    }
+    catch (Exception e){
+        Log.e(TAG, "@@@updatePeer JAVA СЛУЖБА ОШИБКА внутри updatePeer: " + e.getMessage());
+        e.printStackTrace();
+        }
+}
+
 
 }

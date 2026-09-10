@@ -11,9 +11,11 @@ ApplicationWindow {
     title: "TeleLoc Рация"
 
     property string activeChatPeer: ""
+    property string savedName: "Полосарь"
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
-
+    property bool develop : true
+    property int micVolume: 0
     ListModel {
         id: chatLogModel
     }
@@ -82,7 +84,7 @@ ApplicationWindow {
     Rectangle {
         id: toolbar
         width: parent.width
-        height: 115
+        height: 160
         color: "#2c3e50"
         anchors.top: parent.top
 
@@ -92,6 +94,7 @@ ApplicationWindow {
             spacing: 5
 
             Row {
+                visible: develop
                 width: parent.width
                 height: 50
                 spacing: 8
@@ -151,7 +154,10 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    onClicked: settingsDialog.open()
+                    onClicked: {
+                        savedName = netEngine.getSavedName()
+                        settingsDialog.open()
+                    }
                 }
 
                 Button {
@@ -393,6 +399,99 @@ ApplicationWindow {
                     elide: Text.ElideRight
                 }
             }
+            Row {
+                width: parent.width
+                height: 50
+                spacing: 8
+//                import QtQuick
+//                import QtQuick.Controls
+
+                // Кнопка записи (Красный треугольник / Красный квадрат)
+                Button {
+                    id: btnRecord
+                    width: 60
+                    height: 60
+                    checkable: true
+                    checked: false
+
+                    onCheckedChanged: {
+                        if (checked) {
+                            // Вызываем мастер-метод: он запустит запись тут и отправит TCP-команду на то устройство
+                            netEngine.masterStartRecording()
+                        } else {
+                            netEngine.masterStopRecording()
+                        }
+                    }
+
+                    background: Rectangle {
+                        color: btnRecord.checked ? "#FFC0CB" : "#FFFFFF"
+                        border.color: "#888888"
+                        border.width: 1
+                        radius: 10
+                    }
+
+                    contentItem: Item {
+                        anchors.fill: parent
+
+                        // Красный треугольник (Запись не идет)
+                        Canvas {
+                            anchors.centerIn: parent
+                            width: 40
+                            height: 40
+                            visible: !btnRecord.checked
+
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.fillStyle = "#FF0000"
+                                ctx.beginPath()
+                                ctx.moveTo(10, 5)
+                                ctx.lineTo(35, 20)
+                                ctx.lineTo(10, 35)
+                                ctx.closePath()
+                                ctx.fill()
+                            }
+                        }
+
+                        // Красный квадрат (Идет запись)
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 30
+                            height: 30
+                            color: "#FF0000"
+                            visible: btnRecord.checked
+                        }
+                    }
+                }
+
+                // Кнопка микрофона (Эмодзи микрофона)
+                Button {
+                    id: btnMute
+                    width: 60
+                    height: 60
+                    checkable: true
+                    checked: false // false означает, что Mute выключен (микрофон работает)
+
+                    onCheckedChanged: {
+                        audioEngine.muteMicrophone(checked)
+                    }
+
+                    background: Rectangle {
+                        // Если checked == false, то микрофон РАБОТАЕТ -> розовый фон. Иначе — белый.
+                        color: !btnMute.checked ? "#FFC0CB" : "#FFFFFF"
+                        border.color: "#888888"
+                        border.width: 1
+                        radius: 10
+                    }
+
+                    contentItem: Text {
+                        text: "🎙️"
+                        font.pointSize: 36
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
         }
     }
     ListView {
@@ -569,8 +668,9 @@ ApplicationWindow {
             TextField {
                 id: settingsNameInput
                 width: parent.width
+                height: 40
                 placeholderText: "Ваше имя"
-                text: netEngine.getSavedName()
+                text: savedName
             }
 
             Button {
@@ -580,7 +680,7 @@ ApplicationWindow {
                 contentItem: Text { text: "Сохранить"; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: {
                     if (settingsNameInput.text.trim() !== "") {
-                        netEngine.saveNameToFile(settingsNameInput.text)
+                        netEngine.saveName(settingsNameInput.text)
                     }
                     settingsDialog.close()
                 }

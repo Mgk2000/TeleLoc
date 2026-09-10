@@ -100,7 +100,7 @@ int main(int argc, char *argv[])
             qDebug() << "@@@@@@@@@@ C++ ПРОВЕРКА: Таймер сработал, ищу класс службы...";
 
             // Вариант 1 (маленькие буквы)
-            QJniObject classNameStr = QJniObject::fromString("org.qtproject.example.appteleloc.TeleLocService");
+            QJniObject classNameStr = QJniObject::fromString("org.qtproject.example.appTeleLoc.TeleLocService");
             QJniObject serviceClass = QJniObject::callStaticObjectMethod(
                 "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", classNameStr.object());
 
@@ -165,7 +165,7 @@ int main(int argc, char *argv[])
 #endif
 
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
-
+    engine.rootContext()->setContextProperty("AudioEngine", netEngine.audioEngine);
     const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
         &app, [url](QObject *obj, const QUrl &objUrl) {

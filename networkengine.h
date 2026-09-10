@@ -10,10 +10,11 @@
 #include <QUdpSocket>
 #include <QSoundEffect>
 #include <QUrl>
+#include <QTimer>
 #include "audioengine.h"
 class QLocalServer;
 class QLocalSocket;
-
+#define NEWUSER "НЕКТО"
 struct UserInfo {
     QString name;
     QString ip[3];
@@ -44,20 +45,25 @@ public:
     Q_INVOKABLE void stopAudioCall();
     Q_INVOKABLE void sendMessage(const QString &targetPeer, const QString &text);
     Q_INVOKABLE QString getSavedName();
-    Q_INVOKABLE void saveNameToFile(const QString &name);
+    Q_INVOKABLE void saveName(const QString &name);
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
-    Q_INVOKABLE void refreshPeersForUi();
     QList<UserInfo> loadPeersFromConfig();
     void debugMsg(const QString& s);
     void unpressCallButtons();
     void pressCallButon(int _netType);
     Q_INVOKABLE bool activeNetType();
     CallInfo callInfo;
+    AudioEngine *audioEngine;
 
     QByteArray getCallData(int netType);
+    Q_INVOKABLE void masterStartRecording();
+    Q_INVOKABLE void masterStopRecording();
+
+    void sendTCP(const QString &command);
+    void configFromString(const QString & sconf);
 
 signals:
     void peerListChanged();
@@ -82,8 +88,6 @@ private slots:
     void m_unixSendAlivePing();
 
 #endif
-    void updateInterfaces();
-
 private:
     void readConfig();
     void savePeersToConfig();
@@ -91,9 +95,8 @@ private:
     QTcpSocket *tcpSocket;
     QTcpSocket *tcpClientSocket;
     QUdpSocket *udpSocket;
-    AudioEngine *audioEngine;
 
-    QVector<UserInfo> m_users;
+    QList<UserInfo> m_users;
     const int PORT = 28000;
 
     QSoundEffect *m_ringbackTone;
@@ -110,6 +113,7 @@ private:
     void m_unixStartServer();
     void unixSendAlivePing();
     bool firstAlive = true;
+    void sendCommandToTeleLocService(int commandId, const QString &payload);
 #endif
     QTimer* m_unixAliveTimer;
 
@@ -122,6 +126,8 @@ private:
     }
     void sendCallByTcp(const QString &name, int netType);
     void setNetType(int _netType);
+
+    void deleteLastCall();
 };
 
 #endif // NETWORKENGINE_H

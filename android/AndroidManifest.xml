@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://android.com" 
     package="org.qtproject.example"
+	
     android:installLocation="auto"
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
@@ -15,6 +17,9 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <!-- Разрешения для надежной фоновой работы в Android 14+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -25,6 +30,8 @@
     <!-- Приоритеты экрана -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+	<uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+ 
     <uses-permission android:name="android.permission.REORDER_TASKS" />
 	
 	    <!-- Разрешение для работы службы в режиме аудиоплеера/рации -->
@@ -35,7 +42,11 @@
 	<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
+<!-- Разрешение для поиска устройств по Wi-Fi без геолокации (Android 13+) -->
+<uses-permission 
+    android:name="android.permission.NEARBY_WIFI_DEVICES" 
+    android:usesPermissionFlags="neverForLocation" />
+    <attribution android:tag="null" android:label="@string/null_attribution_label" /> 
 
     <!-- %%INSERT_FEATURES -->
     <supports-screens
@@ -55,7 +66,10 @@
             android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
             android:launchMode="singleTop"
             android:screenOrientation="unspecified"
-            android:exported="true">
+			android:showWhenLocked="true"
+            android:turnScreenOn="true"
+			android:exported="true">
+			
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -83,7 +97,6 @@
         <service android:name="org.qtproject.example.appTeleLoc.TeleLocService"
 				 android:foregroundServiceType="mediaPlayback"
 				 android:stopWithTask="false"
-				 android:process=":remote"
                  android:exported="false">
             <meta-data android:name="android.app.lib_name" android:value="appTeleLoc" />
             <meta-data android:name="android.app.background_running" android:value="true" />

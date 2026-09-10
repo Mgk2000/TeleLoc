@@ -2,44 +2,55 @@
 #define AUDIOENGINE_H
 
 #include <QObject>
-#include <QAudioFormat>
+#include <QUdpSocket>
 #include <QAudioSource>
 #include <QAudioSink>
+#include <QMediaDevices>
 #include <QIODevice>
-#include <QTcpSocket>
-#include <QTcpServer>
-#include <QTimer>
+#include <QByteArray>
+#include <QFile>
 
 class AudioEngine : public QObject
 {
     Q_OBJECT
 public:
     explicit AudioEngine(QObject *parent = nullptr);
-    ~AudioEngine();
-
     void startRecording(const QString &targetIp);
     void stop();
+    Q_INVOKABLE void startWriteToFile(const QString &role);
+    Q_INVOKABLE void stopWriteToFile();
+    Q_INVOKABLE void muteMicrophone(bool mute);
+signals:
+    void micVolumeUpdated(int volume);
+    void netVolumeUpdated(int volume);
 
-    void writeAudioFrame(const QByteArray &data);
 private slots:
-    void onNewConnection();
-    void onReadyRead();
+    void onReadyReadUdp();
 
 private:
-    QAudioFormat m_format;
+    QUdpSocket *m_udpAudioReceiver;
+    QUdpSocket *m_udpAudioSender;
     QAudioSource *m_audioSource;
     QAudioSink *m_audioSink;
-    QIODevice *m_inputDevice;
-    QIODevice *m_outputDevice;
-    QTcpServer *m_tcpAudioServer;
-    QTcpSocket *m_tcpAudioSocket;
-    QTcpSocket *m_tcpAudioClient;
-    const int AUDIO_PORT = 28002;
-    QTimer* volumeTimer;
-signals:
-    void micVolumeChanged(int volume);
-    void netVolumeChanged(int volume);
+    QIODevice *m_audioInputDevice;
+    QIODevice *m_audioOutputDevice;
+    QByteArray m_ringBuffer;
+    QString m_targetIp;
+    void writeWavHeader(QFile &file, int dataSize);
+    // Файлы для стороны Отправителя
+    QFile m_unixFileSenderIn;
+    int   m_unixSizeSenderIn;
+    QFile m_unixFileSenderNet;
+    int   m_unixSizeSenderNet;
 
+    // Файлы для стороны Получателя
+    QFile m_unixFileReceiverNet;
+    int   m_unixSizeReceiverNet;
+    QFile m_unixFileReceiverOut;
+    int   m_unixSizeReceiverOut;
+
+    QString m_unixCurrentRole; // "sender", "receiver" или "none"
+    bool m_unixIsMuted;
 };
 
 #endif // AUDIOENGINE_H
