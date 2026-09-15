@@ -11,18 +11,20 @@ public class TeleLocWakeReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
-        Log.d(TAG, "Ресивер поймал: " + action + ". Запускаем службу...");
+        Log.w(TAG, "@@@rec 2 Ресивер поймал: " + action + ". Запускаем службу...");
 
-        // Создаем интент на службу через полное имя класса
-        Intent serviceIntent = new Intent();
-        serviceIntent.setClassName("org.qtproject.example.appTeleLoc", "org.qtproject.example.appTeleLoc.TeleLocService");
+        // Получаем контекст безопасного хранилища (Device Protected Storage)
+        Context secureContext = context.createDeviceProtectedStorageContext();
+
+        // СБОРКА ИНТЕНТА НАПРЯМУЮ ЧЕРЕЗ КЛАСС (Убирает ошибку not found)
+        Intent serviceIntent = new Intent(secureContext, TeleLocService.class);
 
         try {
-            // Запускаем как ОБЫЧНУЮ службу (не foreground). В Direct Boot это разрешено!
-            context.startService(serviceIntent);
-            Log.d(TAG, "Обычный старт TeleLocService выполнен.");
+            // Запускаем службу
+            secureContext.startService(serviceIntent);
+            Log.d(TAG, "@@@rec Обычный старт TeleLocService выполнен.");
         } catch (Exception e) {
-            Log.e(TAG, "Ошибка старта службы: " + e.getMessage());
+            Log.e(TAG, "@@@rec Ошибка старта службы: " + e.getMessage());
         }
     }
 }

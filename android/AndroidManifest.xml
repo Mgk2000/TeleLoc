@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://android.com" 
-    package="org.qtproject.example"
+    package="org.qtproject.example.appTeleLoc"
 	
     android:installLocation="auto"
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
@@ -58,6 +58,7 @@
         android:name="org.qtproject.qt.android.bindings.QtApplication"
         android:hardwareAccelerated="true"
         android:label="-- %%INSERT_APP_NAME%% --"
+		android:directBootAware="true"
         android:requestLegacyExternalStorage="true"
         android:allowBackup="true"
         android:fullBackupOnly="false">
@@ -68,6 +69,7 @@
             android:screenOrientation="unspecified"
 			android:showWhenLocked="true"
             android:turnScreenOn="true"
+			android:directBootAware="true"
 			android:exported="true">
 			
             <intent-filter>
@@ -97,23 +99,22 @@
         <service android:name="org.qtproject.example.appTeleLoc.TeleLocService"
 				 android:foregroundServiceType="mediaPlayback"
 				 android:stopWithTask="false"
+				 android:directBootAware="true"
                  android:exported="false">
             <meta-data android:name="android.app.lib_name" android:value="appTeleLoc" />
             <meta-data android:name="android.app.background_running" android:value="true" />
         </service>
         <!-- Автономный системный приёмник, караулящий импульсы подъёма из глубокого сна -->
-        <receiver android:name="org.qtproject.example.appTeleLoc.TeleLocWakeReceiver"
-                  android:exported="true"
-				  android:enabled="true" 
-				  android:directBootAware="true"> <!-- Позволяет работать до ввода пароля -->
-            <intent-filter>
-                <!-- Системный фильтр, который Android разрешает будить по сети -->
-                <action android:name="org.qtproject.example.appTeleLoc.WAKE_UP_ACTION" />
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" /> <!-- Для режима шифрования -->
+<receiver android:name=".TeleLocWakeReceiver" 
+          android:enabled="true" 
+          android:exported="true"
+          android:directBootAware="true"> <!-- Магия тут -->
+    <intent-filter>
+        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+    </intent-filter>
+</receiver>
 
-            </intent-filter>
-        </receiver>
 
 
     </application>

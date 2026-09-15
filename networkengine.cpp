@@ -115,6 +115,7 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
             targetIp = m_users[i].ip[netType];
             break;
         }
+    qDebug() << "@@@call Calling" << name << targetIp;
     int port = 28501;
     QObject::connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
     socket->connectToHost(targetIp, port);
@@ -301,12 +302,9 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
         tcpSocket->connectToHost(targetIp, PORT);
         if (tcpSocket->waitForConnected(2000)) {
             tcpSocket->write(data);
-            tcpSocket->waitForBytesWritten(1000);
             tcpSocket->disconnectFromHost();
-        }
+    }   qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 5 для:" << name;
     }
-    qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 5 для:" << name;
-
     m_ringbackTone->play();
 }
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) {
@@ -394,7 +392,11 @@ void NetworkEngine::readConfig() {
     qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
     qint64 dt = currMsec - lastReadConfigTime;
     lastReadConfigTime = currMsec;
+#ifdef Q_OS_ANDROID
+    QString fName = "/data/user_de/0/org.qtproject.example.appTeleLoc/files/teleloc.conf";
+#else
     QString fName = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
+#endif
     QFile file(fName);
     if (!file.open(QIODevice::ReadOnly)) {
         return;
@@ -1037,4 +1039,6 @@ void NetworkEngine::sendCommandToTeleLocService(int commandId, const QString &pa
 }
 #endif
 
-bool UserInfo::isAlive() const {return QDateTime::currentMSecsSinceEpoch() - lastPing < 600000;}
+bool UserInfo::isAlive() const {
+    return true|| QDateTime::currentMSecsSinceEpoch() - lastPing < 600000;
+}

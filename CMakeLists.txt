@@ -43,6 +43,7 @@ qt_add_qml_module(appTeleLoc
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocWakeReceiver.java
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
+        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
 )
 
 # Линковка системных библиотек Qt

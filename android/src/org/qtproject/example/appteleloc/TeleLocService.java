@@ -42,7 +42,7 @@ public class TeleLocService extends Service {
                 String[] ip = {"", "", ""};
                 long lastPing = 0;
                 private boolean isAlive()
-                {return System.currentTimeMillis() - lastPing < 600000;}
+                {return System.currentTimeMillis() - lastPing < 60000000;}
 
 	}
         private List<UserInfo> users = new ArrayList<>();
@@ -90,7 +90,7 @@ private void checkLastCallTime()
 {
     if (lastCall == null)
     return;
-    if (System.currentTimeMillis() - lastCallTime> 600000)
+    if (System.currentTimeMillis() - lastCallTime> 60000000)
             lastCall = null;
 }
 private void readConfig() {
@@ -143,7 +143,8 @@ public void executeCommandFromCpp(int commandId, String param) {
             }
      }
  private void listenForCalls() {
-        try {
+    Log.d(TAG, "@@@listen listenForCalls started");
+    try {
             serverSocket = new ServerSocket(TCP_PORT);
             while (isRunning) {
                 // Ждем подключения по TCP (процесс тут спит и не ест батарею)
@@ -154,26 +155,26 @@ public void executeCommandFromCpp(int commandId, String param) {
                 int bytesRead = input.read(buffer);
 
                 if (bytesRead > 0) {
-					String message = new String(buffer,0 ,  bytesRead, "UTF-8");
-					
+                    String message = new String(buffer,0 ,  bytesRead, "UTF-8");
                     Log.d(TAG, "@@@ Tcp received " + message);
                         org.json.JSONObject obj = new org.json.JSONObject(message);
 						String stype = obj.optString("type");
                         String pName = obj.optString("name");
-						int netType  = obj.optInt("netType");
+                        int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
 						//Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
                     //Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
-						if ("incoming_call".equals(stype))
-							{
-								String sNetType = obj.optString("name");
-								saveCall(pName, pIp, netType);
-								triggerFullScreenCall(message );
-							}
-						else
-							{
-							Log.d(TAG, "@@@ Tcp type:" + stype);
-							}	
+                        if ("incoming_call".equals(stype))
+                        {
+                            String sNetType = obj.optString("netType");
+                            saveCall(pName, pIp, netType);
+                            Log.d(TAG, "Before triggerFullScreenCall " + pIp + " " + pName);
+                            triggerFullScreenCall(message );
+                        }
+                        else
+                        {
+                            Log.d(TAG, "@@@ Tcp type:" + stype);
+                        }
 						
 					                    // Записываем данные в ваш файл во внутреннюю память приложения
                    /* File callFile = new File(getFilesDir(), "incoming_call.txt");
@@ -209,7 +210,11 @@ public void onCreate() {
 
     try {
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 2");
-        configPath = QStandardPaths_writableLocation();
+        Context deviceProtectedContext = this.createDeviceProtectedStorageContext();
+        // Вместо прежнего пути к конфигу:
+        // Используем незашифрованную папку файлов, доступную до ввода пароля
+        configPath = deviceProtectedContext.getFilesDir().getAbsolutePath() + "/teleloc.conf";
+
 
         readConfig();
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 3");
@@ -241,14 +246,17 @@ public void onCreate() {
     new Thread(new Runnable() {
         @Override
         public void run() {
+        Log.d(TAG, "@@@onreate before startSendDiscovery()");
             startSendDiscovery();
         }
     }).start();
 
     startUdpReceiver();
 	        isRunning = true;
-        serverThread = new Thread(this::listenForCalls);
-        serverThread.start();
+    serverThread = new Thread(this::listenForCalls);
+    serverThread.start();
+    m_isRunning = true;
+
 }
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -258,7 +266,6 @@ public void onCreate() {
 
            // Передаем ТЕКУЩИЙ живой экземпляр (this) в C++
  //          sendDataToCpp(this, 101, jsonWithCallData);
-     m_isRunning = true;
 
         return START_STICKY;
     }
@@ -344,7 +351,7 @@ private void setName(String name)
         public void run() {
                 cnt++;
                 int us = users.size();
-                Log.d(TAG, "@@@ssd users=" +us );
+                Log.d(TAG, "@@@ssd users=" +us + "running=" + m_isRunning );
                while (m_isRunning) {
                 try {
                     //if (us <=0 || users.get(0).name.equals(""))
@@ -357,7 +364,6 @@ private void setName(String name)
                     }
                     Thread.sleep(3000);
                     Log.d(TAG, "@@@sendiscovery 2    ");
-                    String configPath = QStandardPaths_writableLocation();
                     java.io.File file = new java.io.File(configPath);
                     String myName = users.get(0).name;
                     Log.d(TAG,"@@@sss config="+ configPath+"exists="+file.exists()) ;
@@ -449,60 +455,92 @@ private void setName(String name)
 
     }
 }
-    public void triggerFullScreenCall(String callStr) {
-        Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callStr);
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (pm != null) {
-            PowerManager.WakeLock wl = pm.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, 
-                "TeleLoc:CallWakeLock"
-            );
-            wl.acquire(5000);
-        }
+public void triggerFullScreenCall(String callStr) {
+    Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callStr);
 
-        Intent callIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        if (callIntent == null) {
-            Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА: Не удалось получить Launch Intent для приложения!");
-            return;
-        }
-
-        callIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
-        callIntent.putExtra("callerName", callStr);
-        callIntent.putExtra("remoteIp", "0.0.0.0");
-        callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-
-        try {
-            Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка фонового вызова startActivity()...");
-            startActivity(callIntent);
-        } catch (Exception e) {
-            Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА запуска startActivity(): " + e.getMessage());
-        }
-
-        final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
-                : PendingIntent.FLAG_UPDATE_CURRENT;
-
-            PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
-            
-            Notification notification = createVoipNotification("Входящий вызов от " + callStr, fullScreenPendingIntent, true);
-            manager.notify(1, notification);
-            Log.d(TAG, "@@@ ОКНО JAVA: Громкая плашка выслана менеджеру");
-
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        manager.cancel(1);
-                        Log.d(TAG, "@@@ ОКНО JAVA: Временная громкая плашка удалена");
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
-            }, 6000);
-        }
+    // 1. Пробуждаем процессор и экран физически
+    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+    if (pm != null) {
+        PowerManager.WakeLock wl = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE,
+            "TeleLoc:CallWakeLock"
+        );
+        wl.acquire(5000);
     }
+
+    // 2. Получаем правильный Intent для запуска приложения
+    Intent callIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+    if (callIntent == null) {
+        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА: Не удалось получить Launch Intent для приложения!");
+        return;
+    }
+
+    // Задаем параметры и флаги для обхода экрана блокировки
+    callIntent.setAction("org.qtproject.example.appTeleLoc.WAKE_UP_ACTION");
+    callIntent.putExtra("callerName", callStr);
+    callIntent.putExtra("remoteIp", "0.0.0.0");
+    callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                      | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                      | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+
+    try {
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка фонового вызова startActivity()...");
+        startActivity(callIntent);
+    } catch (Exception e) {
+        Log.w(TAG, "@@@ JAVA СЛУЖБА ПРЕДУПРЕЖДЕНИЕ: Прямой startActivity заблокирован (нормально для Direct Boot): " + e.getMessage());
+    }
+
+    // 3. Создаем FullScreenIntent и нативное VoIP-уведомление (без AndroidX)
+    final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+    if (manager != null) {
+        int pendingFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
+            : PendingIntent.FLAG_UPDATE_CURRENT;
+
+        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(this, 0, callIntent, pendingFlags);
+
+        // ИСПОЛЬЗУЕМ СТАНДАРТНЫЙ android.app.Notification.Builder
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, "my_service_ch");
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        builder.setSmallIcon(android.R.drawable.ic_menu_call) // Системная иконка трубки
+            .setContentTitle("Входящий вызов")
+            .setContentText("Вызывает: " + callStr)
+            .setAutoCancel(true)
+            .setOngoing(true); // Запрещаем смахивание
+
+        // Проставляем системные VoIP флаги (доступны начиная с Android 5.0 / 8.0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            builder.setCategory(Notification.CATEGORY_CALL) // Категория звонка
+                   .setPriority(Notification.PRIORITY_MAX)   // Максимальный приоритет
+                   .setVisibility(Notification.VISIBILITY_PUBLIC); // Видимость на локскрине
+        }
+
+        // Самая важная команда для принудительного развертывания окна
+        builder.setFullScreenIntent(fullScreenPendingIntent, true);
+
+        Notification notification = builder.build();
+        manager.notify(1, notification);
+        Log.d(TAG, "@@@ ОКНО JAVA: Громкая VoIP-плашка с FullScreenIntent выслана менеджеру");
+
+        // Автоматическая очистка плашки через 6 секунд, если никто не ответил
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    manager.cancel(1);
+                    Log.d(TAG, "@@@ ОКНО JAVA: Временная громкая плашка удалена");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }, 6000);
+    }
+}
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         Log.d(TAG, "@@@ JAVA СЛУЖБА: Пользователь смахнул приложение! Планирую перезапуск...");
@@ -647,15 +685,9 @@ private String usersToString()
 		return "";
     }
 }
-    private String QStandardPaths_writableLocation() {
-        return getFilesDir().getParent() + "/files/teleloc.conf";
-        //return configPath = deviceProtectedContext.getFilesDir().getAbsolutePath() + "/teleloc.conf";
-
-    }
 private void saveConfig()      {
     try {
 
-        String configPath = QStandardPaths_writableLocation();
         java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
         String s = configToString();
         fos.write(s.getBytes("UTF-8"));
