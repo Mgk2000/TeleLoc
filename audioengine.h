@@ -9,7 +9,8 @@
 #include <QIODevice>
 #include <QByteArray>
 #include <QFile>
-
+#include <QTimer>
+class NetworkEngine;
 class AudioEngine : public QObject
 {
     Q_OBJECT
@@ -20,12 +21,16 @@ public:
     Q_INVOKABLE void startWriteToFile(const QString &role);
     Q_INVOKABLE void stopWriteToFile();
     Q_INVOKABLE void muteMicrophone(bool mute);
+    QIODevice *m_audioOutputDevice;
+    QByteArray m_ringBuffer;
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
 
 private slots:
     void onReadyReadUdp();
+    void onTimer();
+
 
 private:
     QUdpSocket *m_udpAudioReceiver;
@@ -33,8 +38,6 @@ private:
     QAudioSource *m_audioSource;
     QAudioSink *m_audioSink;
     QIODevice *m_audioInputDevice;
-    QIODevice *m_audioOutputDevice;
-    QByteArray m_ringBuffer;
     QString m_targetIp;
     void writeWavHeader(QFile &file, int dataSize);
     // Файлы для стороны Отправителя
@@ -51,6 +54,11 @@ private:
 
     QString m_unixCurrentRole; // "sender", "receiver" или "none"
     bool m_unixIsMuted;
+    NetworkEngine * netEngine;
+    QTimer audioTimer;
+    void startAudioTimer();
+    int inAudioSize = 0, outAuioSize = 0;
+private slots:
 };
 
 #endif // AUDIOENGINE_H

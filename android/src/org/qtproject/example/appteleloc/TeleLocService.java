@@ -26,8 +26,8 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.io.OutputStream;
-import android.net.LocalSocket;
-import android.net.LocalSocketAddress;
+//import android.net.LocalSocket;
+//import android.net.LocalSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -40,7 +40,10 @@ public class TeleLocService extends Service {
 	private class UserInfo {
 		String name = "";
                 String[] ip = {"", "", ""};
-		boolean isAlive;
+                long lastPing = 0;
+                private boolean isAlive()
+                {return System.currentTimeMillis() - lastPing < 600000;}
+
 	}
         private List<UserInfo> users = new ArrayList<>();
     private static final String TAG = "TeleLocService";
@@ -55,7 +58,7 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
     private String pendingDataMessage = null;
     private long pendingDataTime = 0;
     private String pendingIp="";
-    private LocalSocket clientSocket = null;
+    //private LocalSocket clientSocket = null;
     private boolean isConnected = false;
     private boolean isRunning = false;
     private int TCP_PORT = 28501;
@@ -64,6 +67,7 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
     String configPath = "";
     org.json.JSONObject lastCall = null;
     long lastCallTime = 0;
+    private Context deviceProtectedContext;
 // Нативный метод принимает первым аргументом экземпляр сервиса
 // Измените тип первого аргумента на базовый Object.
 // Для JNI это снимет необходимость искать сложную сигнатуру класса.
@@ -76,7 +80,6 @@ if (users.size() !=0) return;
 Log.d(TAG, "@@@exc createMyUser() 2");
     UserInfo u = new UserInfo();
     u.name = "Malamu";
-    u.isAlive = true;
 
     for (int i =0; i<3; i++)
         u.ip[i] = getLocalIpAddress(i);
@@ -87,7 +90,7 @@ private void checkLastCallTime()
 {
     if (lastCall == null)
     return;
-    if (System.currentTimeMillis() - lastCallTime> 60000)
+    if (System.currentTimeMillis() - lastCallTime> 600000)
             lastCall = null;
 }
 private void readConfig() {
@@ -101,13 +104,17 @@ private void readConfig() {
                 fis.read(data);
                 fis.close();
                 org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
-                createMyUser();
-                org.json.JSONObject myPeer = configObj.getJSONObject("myPeer");
-                users.get(0).name = myPeer.optString("name");
-                users.get(0).isAlive = true;
-                org.json.JSONArray ipArr = myPeer.getJSONArray("ip");
-                for (int i = 0; i <3; i++)
-                    users.get(0).ip[i] = ipArr.getString(i);
+                org.json.JSONArray peerArr = configObj.getJSONArray("peers");
+                for (int i =0; i< peerArr.length(); i++) {
+                    org.json.JSONObject peer = peerArr.getJSONObject(i);
+                    UserInfo user = new UserInfo();
+                    user.name = peer.optString("name");
+                    user.lastPing = peer.optLong("lastPing");
+                    org.json.JSONArray ipArr = peer.getJSONArray("ip");
+                    for (int j = 0; j <3; j++)
+                        user.ip[j] = ipArr.getString(j);
+                    users.add(user);
+                    }
                 lastCall = configObj.getJSONObject("lastCall");
             }
          else
@@ -188,191 +195,22 @@ public void executeCommandFromCpp(int commandId, String param) {
         }
     }
 
-    // --- 1. МЕТОД: Служба получила звонок по UDP ---
-    private void onUdpCallReceived(String callStr) {
-        long currentTime = System.currentTimeMillis();
-        String dataMessage = callStr;
-        Log.d (TAG, "@@@ onUdpCallReceived" + callStr);
-        // Проверяем, был ли процесс активен в последние 10 секунд
-        if (isConnected && (currentTime - lastAliveTime <= 10000)) {
-            Log.d(TAG, "@@@ Процесс активен (живой пинг есть). Отправляем звонок сразу.");
-            sendDirectly(dataMessage);
-        } else {
-            Log.d(TAG, "@@@ Процесс спит или не отвечает. Будим его и сохраняем звонок в буфер.");
-            
-            // Сохраняем сообщение и время его прихода
-            this.pendingDataMessage = dataMessage;
-            this.pendingDataTime = currentTime;
-
-            // Будим процесс (ваш рабочий код запуска Activity)
-            //wakeUpQtProcess(); 
-            
-            // Запускаем поток подключения (он будет пытаться соединиться, пока Qt просыпается)
-            startConnectionLoop();
-        }
-    }
-
-    // --- 2. МЕТОД: Поток фонового соединения и чтения alive-сообщений ---
-    private void startConnectionLoop() {
-        Log.d(TAG, "@@@ startConnectionLoop() 1" );
-        if (isConnected) return;
-        Log.d(TAG, "@@@ startConnectionLoop() 2" );
-
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                Log.d(TAG, "@@@ startConnectionLoop() 3" );
-                String socketPath = getCacheDir().getAbsolutePath() + "/TeleLocSocketKey";
-                LocalSocketAddress address = new LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM);
-                
-                int attempts = 0;
-                // Пытаемся подключиться в течение 10 секунд (20 попыток по 500мс)
-                while (!isConnected && attempts < 20) {
-                    try {
-                        Log.d(TAG, "@@@ startConnectionLoop() 4 atempts" +  attempts);
-
-                clientSocket = new LocalSocket();
-                        clientSocket.connect(address);
-                         Log.d(TAG, "@@@ startConnectionLoop() 5 isConnecte = true" );
-                        // Если строка выше не выбросила Exception — мы успешно подключились!
-                        isConnected = true; 
-                    } catch (Exception e) {
-                        attempts++;
-                        Log.d(TAG, "@@@ C++ процесс еще просыпается, ждем... (Попытка " + attempts + ")");
-                        try { Thread.sleep(500); } catch (Exception ignored) {}
-                    }
-                }
-
-                if (!isConnected) {
-                    Log.e(TAG, "@@@ [Java ОШИБКА] Не удалось подключиться к C++ за 10 секунд. Звонок забыт.");
-                    pendingDataMessage = null;
-                    return;
-                }
-
-                try {
-                    Log.d(TAG, "@@@ [Java УСПЕХ] Соединение с сокетом C++ установлено удерживается!");
-                    InputStream input = clientSocket.getInputStream();
-                    byte[] buffer = new byte[1024];
-                    int bytesRead;
-
-                    // Бесконечный цикл удержания сокета и чтения пингов от C++
-                    while ( isConnected && (bytesRead = input.read(buffer)) != -1) {
-                    //while (true) {
-					//	bytesRead = input.read(buffer);
-                        String message = new String(buffer, 0, bytesRead, "UTF-8");
-                        
-					if (message.equals("ALIVE") || message.equals("FIRSTALIVE") ) {
-                            long currentTime = System.currentTimeMillis();
-                            lastAliveTime = currentTime;
-                            Log.d(TAG, "@@@ [Java] Получен пинг " + message + " от C++.");
-
-                            // Если в буфере лежит отложенный звонок
-                            if (pendingDataMessage != null) {
-                                // Проверяем, уложился ли C++ в 10 секунд с момента звонка
-                                if (currentTime - pendingDataTime >=5000 && currentTime - pendingDataTime <= 20000) {
-                                    Log.d(TAG, "@@@ [Java] Условие выполнено! Отправляем звонок из буфера.");
-                                    Log.d(TAG, "@@@ " + pendingDataMessage);
-                                    //sendDirectly(pendingDataMessage);
-									sendToQtViaUnixSocket(pendingDataMessage);
- 
-								}
-								else {
-                                    Log.w(TAG, "@@@ [Java] Процесс просыпался слишком долго (>10 сек). Удаляем звонок.");
-                                }
-                                pendingDataMessage = null; // Очищаем буфер
-                            }
-							Thread.sleep(5000);
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "@@@ Соединение разорвано: " + e.getMessage());
-                    e.printStackTrace();
-
-                    isConnected = false;
-                }
-            }
-        }).start();
-    }
-
-    private void sendDirectly(String msg) {
-        try {
-            if (clientSocket != null && isConnected) {
-                OutputStream out = clientSocket.getOutputStream();
-                out.write(msg.getBytes("UTF-8"));
-                out.flush();
-                Log.d(TAG, "@@@ Данные физически ушли в Unix-сокет: " + msg);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Ошибка отправки: " + e.getMessage());
-        }
-    }
-
     @Override
     public IBinder onBind(Intent intent) { return null; }
 
-    // Функция отправки данных по локальной сети в Qt
-public  void sendToQtViaUnixSocket(final String message) {
-    new Thread(new Runnable() {
-        @Override
-        public void run() {
-            try {
-                Log.d(TAG, "@@@ [Java] Попытка подключения через файловый Unix-сокет...");
-                
-                LocalSocket socket = new LocalSocket();
-                
-                // Формируем путь к файлу сокета в папке кэша
-                String socketPath = getCacheDir().getAbsolutePath() + "/TeleLocSocketKey";
-                Log.d(TAG, "@@@ [Java] Путь поиска сокета: " + socketPath);
-                
-                LocalSocketAddress address = new LocalSocketAddress(
-                    socketPath, 
-                    LocalSocketAddress.Namespace.FILESYSTEM
-                );
-                
-                // Пытаемся подключиться в цикле, пока C++ полностью не создаст файл
-                int retryCount = 0;
-                while (!socket.isConnected() && retryCount < 20) {
-                    try {
-                        socket.connect(address);
-                    } catch (Exception e) {
-                        retryCount++;
-                        Thread.sleep(500); // Ждем 0.5 сек перед повторной попыткой
-                    }
-                }
-
-                if (socket.isConnected()) {
-                    Log.d(TAG, "@@@ [Java УСПЕХ] Соединение с C++ установлено!");
-                    
-                    // Запускаем бесконечный цикл чтения пингов ALIVE от С++
-                    InputStream input = socket.getInputStream();
-                    byte[] buffer = new byte[1024];
-                    int bytesRead;
-
-                    // Тут выполняется ваш алгоритм проверки 10 секунд (из предыдущего ответа)
-                    // ...
-                    
-                } else {
-                    Log.e(TAG, "@@@ [Java ОШИБКА] Не удалось подключиться к файлу сокета за 10 секунд.");
-                }
-                
-            } catch (Exception e) {
-                Log.e(TAG, "@@@ [Java КРИТ ОШИБКА] " + e.getMessage());
-            }
-        }
-    }).start();
-}
- @Override
 public void onCreate() {
+    //if (m_isRunning)
+        //return;
     super.onCreate();
     instance = this;
 //    System.loadLibrary("appTeleLoc");
     Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 1");
 
-    m_isRunning = true;
 
     try {
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 2");
         configPath = QStandardPaths_writableLocation();
+
         readConfig();
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 3");
 
@@ -388,8 +226,6 @@ public void onCreate() {
             m_multicastLock = wm.createMulticastLock("TeleLoc:MulticastLock");
             m_multicastLock.acquire();
             Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock успешно получен.");
-			startConnectionLoop();
-			Log.d(TAG, "@@@ startConnectionLoop.");
         }
 		else
 			Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManager = 0.");
@@ -417,10 +253,12 @@ public void onCreate() {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onStartCommand()");
+        //m_isRunning = isProcessRunning();
         String jsonWithCallData = "{\"number\":\"+79991112233\"}";
 
            // Передаем ТЕКУЩИЙ живой экземпляр (this) в C++
  //          sendDataToCpp(this, 101, jsonWithCallData);
+     m_isRunning = true;
 
         return START_STICKY;
     }
@@ -511,8 +349,14 @@ private void setName(String name)
                 try {
                     //if (us <=0 || users.get(0).name.equals(""))
                     //return;
+                    Log.d(TAG, "@@@sendiscovery 0 isRunning=" + isProcessRunning());
+                    if (users.isEmpty()){
                     Thread.sleep(3000);
-                    Log.d(TAG, "@@@exc  SendDiscovery 0    ");
+                    Log.d(TAG, "@@@sendiscovery 1 users.isEmpty()");
+                    return;
+                    }
+                    Thread.sleep(3000);
+                    Log.d(TAG, "@@@sendiscovery 2    ");
                     String configPath = QStandardPaths_writableLocation();
                     java.io.File file = new java.io.File(configPath);
                     String myName = users.get(0).name;
@@ -567,6 +411,7 @@ private void setName(String name)
                            // Здесь можно запустить логику пробуждения C++, если это необходимо,
                            // либо просто сохранить пропущенный звонок в базу данных SQLite / SharedPreferences,
                            // чтобы Qt прочитал его, когда пользователь сам откроет приложение.
+                           m_isRunning = false;
 
                        } catch (Throwable t) {
                            // Ловим вообще любые другие системные ошибки, чтобы сервис никогда не падал
@@ -606,8 +451,6 @@ private void setName(String name)
 }
     public void triggerFullScreenCall(String callStr) {
         Log.d(TAG, "@@@ JAVA СЛУЖБА: Вызов triggerFullScreenCall() для: " + callStr);
-        sendToQtViaUnixSocket(callStr);
-        onUdpCallReceived(callStr);
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm != null) {
             PowerManager.WakeLock wl = pm.newWakeLock(
@@ -706,15 +549,21 @@ private void printIpAddresses(){
 private String configToString(){
     try {
     org.json.JSONObject configObj = new org.json.JSONObject();
-    org.json.JSONObject myPeer = new org.json.JSONObject();
-    myPeer.put ("name", users.get(0).name);
-    org.json.JSONArray ips  = new org.json.JSONArray();
-    for (int i =0; i< 3; i++)
-        ips.put(users.get(0).ip[i]);
-    myPeer.put("ip", ips);
-    configObj.put("myPeer", myPeer);
+    org.json.JSONArray peerArr = new org.json.JSONArray();
+    for (int i =0; i< users.size(); i++) {
+        UserInfo user = users.get(i);
+        org.json.JSONObject peer = new org.json.JSONObject();
+        peer.put ("name", user.name);
+        org.json.JSONArray ips  = new org.json.JSONArray();
+        for (int j =0; j< 3; j++)
+            ips.put(user.ip[j]);
+        peer.put("ip", ips);
+        peer.put("lastPing", user.lastPing);
+        peerArr.put(peer);
+        }
+    configObj.put("peers", peerArr);
     if (lastCall != null) {
-    if (System.currentTimeMillis() - lastCallTime < 60000)
+    if (System.currentTimeMillis() - lastCallTime < 600000)
         {
         configObj.put("lastCall", lastCall);
         }
@@ -739,7 +588,7 @@ private String usersToString()
     for (int i =0; i< users.size(); i++) {
         org.json.JSONObject peer = new org.json.JSONObject();
         peer.put("name", users.get(i).name);
-        peer.put("isAlive", users.get(i).isAlive);
+        peer.put("lastPing", users.get(i).lastPing);
         org.json.JSONArray ipArr = new org.json.JSONArray();;
         for (int j = 0; j<3; j++)
             ipArr.put(users.get(i).ip[j]);
@@ -758,7 +607,7 @@ private String usersToString()
     }
 }
 
-private String getLocalIpAddress(int netType) {
+ private String getLocalIpAddress(int netType) {
     try {
                 //Log.d(TAG, "@@@### getLocalIpAddress" + netType);
         java.util.List<java.net.NetworkInterface> interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces());
@@ -800,6 +649,8 @@ private String getLocalIpAddress(int netType) {
 }
     private String QStandardPaths_writableLocation() {
         return getFilesDir().getParent() + "/files/teleloc.conf";
+        //return configPath = deviceProtectedContext.getFilesDir().getAbsolutePath() + "/teleloc.conf";
+
     }
 private void saveConfig()      {
     try {
@@ -846,7 +697,7 @@ private void startUdpReceiver() {
                 byte[] buffer = new byte[4096];
                 Log.d(TAG, "@@@ JAVA СЛУЖБА: UDP Приемник Discovery запущен на порту 28001");
 
-                while (m_isRunning) {
+                while (true || m_isRunning) {
                     java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
                     socket.receive(packet);
                     
@@ -872,17 +723,13 @@ private void startUdpReceiver() {
 						else
 						{
                     Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
-							if ("incoming_call1".equals(stype))
+
+if ("incoming_call1".equals(stype))
 							{
 								String sNetType = obj.optString("name");
 								saveCall(pName, pIp, netType);
 								triggerFullScreenCall(message );
 							}
-							else
-							{
-							sendToQtViaUnixSocket(message);
-							onUdpCallReceived(message);
-							}	
 						}
 					}
                     catch (Exception e) {
@@ -899,67 +746,124 @@ private void startUdpReceiver() {
 }
 private void debugUser(UserInfo u, String prefix){
 Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
- + "ip[1]=" + u.ip[1] + "ip[2]=" + u.ip[2] + "isAlive=" + u.isAlive);
+ + "ip[1]=" + u.ip[1] + "ip[2]=" + u.ip[2] + "isAlive=" + u.isAlive());
 }
 
 private void updatePeer(String name, String sip) {
-Log.d(TAG, "@@@updatePeer 0");
+Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
-    if (users.size() ==0) return;
+    if (users.size() ==0) readConfig();
     Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
     Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
-        String[] ip = new String[3];
-        org.json.JSONArray ipArr = new org.json.JSONArray(sip);
-        for (int i =0; i< 3; i++)
-            ip[i] = ipArr.getString(i);
-            Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
-            Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
-            Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
-      //  List<String> ip = new ArrayList<>();
-        if (users.size() > 0 &&  name.equals(users.get(0).name)){
-    Log.d(TAG, "@@@updatePeer 2");
+    String[] ip = new String[3];
+    org.json.JSONArray ipArr = new org.json.JSONArray(sip);
     for (int i =0; i< 3; i++)
-                users.get(0).ip[i] = ip[i];
-                saveConfig();
-                return;
+        ip[i] = ipArr.getString(i);
+    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
+    Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
+    Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
+    int us = users.size();
+    if (us == 0)
+        {
+        Log.e (TAG, "@@@updatePeer НЕТ ЮЗЕРОВ!");
+        return;
         }
-        Log.d(TAG, "@@@updatePeer 3");
-        for (int i =1; i< users.size(); i++)
-            if (users.get(i).name.equals(name)){
-            Log.d(TAG, "@@@updatePeer 4 user[" + i + "] ips=" + users.get(i).ip.length);
-
-//for (int j =0; j< 3; i++)
-users.get(i).ip[0] = ip[0];
-users.get(i).ip[1] = ip[1];
-users.get(i).ip[2] = ip[2];
-                users.get(i).isAlive = true;
-                return;
-            }
-            else if (ip[0].equals("") && users.get(i).ip[0].equals(ip[0])) {
-            Log.d(TAG, "@@@updatePeer 5");
-
-                users.get(i).name = name;
-                users.get(i).ip[1] = ip[1];
-                users.get(i).ip[2] = ip[2];
-                users.get(i).isAlive = true;
-                return;
-                }
-                Log.d(TAG, "@@@updatePeer 6");
-
-        UserInfo u = new UserInfo();
-        u.ip = new String[3];
-
+    if (name.equals(users.get(0).name)){ //ПРишло дискавери от себя
+        Log.d(TAG, "@@@updatePeer 2 - from myself");
+        UserInfo user0 = users.get(0);
         for (int i =0; i< 3; i++)
-            u.ip[i] = ip[i];
-        u.isAlive = true;
+            user0.ip[i] = ip[i];
+        user0.lastPing = System.currentTimeMillis();
+        if (false)
+        for (UserInfo user : users)
+        {
+            String[] iips = user.ip;
+            for (int j =0; j< 3; j++)
+                if (!("".equals(ip[j])) && ip[j].equals(iips[j])) {
+                    String s = "@@@updatepeer Bad user ";
+                    s += user.name;
+                    s+= "has 0ur duplicate ip=";
+                    s+= ip[j];
+                    s+= " - deleted 1";
+                    Log.w(TAG, s);
+                    //Log.w("@@@updatepeer Bad user "+
+                    //    useri.name +"has 0ur duplicate ip=" +ip[j] +  " - deleted 1");
+                    users.remove(user);
+                }
+        }
+        saveConfig();
+        return;
+    }
+    Log.d(TAG, "@@@updatePeer 3 from " +  name);
+    boolean found = false;
+    int iii = -1;
+    for (UserInfo user : users)
+                                                                                                    {
+        String[] ips = user.ip;
+        if (user.name.equals(name)){
+            found = true;
+            Log.d(TAG, "@@@updatePeer 4 user[" + ++iii + "] ips=" +
+                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
+            for (int j =0; j< 3; j++)
+                ips[j] = ip[j];
+            Log.d(TAG, "@@@updatePeer 4.1 user[" + iii + "] ips=" +
+                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
+            user.lastPing = System.currentTimeMillis();
+            Log.d(TAG, "@@@updatePeer 4.2 from " +  name + user.lastPing +  users.get(iii).lastPing);
+            int j = -1;
+            if (false)
+            for (UserInfo userj : users) {
+                j++ ;
+                if (userj != users.get(j))
+                    Log.w (TAG,"@@@updatePeer 4 СБой мндекса" + j);
+                if (user==userj || users.get(0) == userj) continue;
+                String[] jips = userj.ip;
+                for (int k =0; k< 3; k++){
+                    if (!"".equals(ip[k]) && jips[k].equals(ip[k]))
+                    {
+                        Log.w(TAG, "@@@updatepeer Bad user "
+                        +userj.name +
+                        "has duplicate ip="
+                        +ip[k] +
+                        " - deleted 2");
+                        users.remove(userj);
+                        j--;
+                    }
+                }
+            }
+        }
+    }
+    if (!found) {
+        UserInfo u = new UserInfo();
         u.name = name;
+        for (int i =0; i < 3; i++)
+            u.ip[i] = ip[i];
+        u.lastPing = System.currentTimeMillis();
         users.add(u);
     }
-    catch (Exception e){
+    if (false)
+    for (UserInfo user : users) {
+        if (user!= users.get(0) && !user.isAlive())
+            users.remove(user);
+    }
+
+    saveConfig();
+}
+catch (Exception e){
         Log.e(TAG, "@@@updatePeer JAVA СЛУЖБА ОШИБКА внутри updatePeer: " + e.getMessage());
         e.printStackTrace();
         }
 }
-
+private boolean isProcessRunning() {
+    try {
+    sendDataToCpp(TeleLocService.this, 100,"");
+    Log.d(TAG, "@@@isProcessRunning Process Running");
+    return true;
+    }
+    catch (UnsatisfiedLinkError e) {
+    Log.w(TAG, "@@@isProcessRunning NOT Running");
+    return false;
+    }
+}
 
 }

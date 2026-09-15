@@ -149,12 +149,14 @@ QStringList NetworkEngine::getUsers(int netType) {
 #ifdef Q_OS_ANDROID
     //readConfig();
 #endif
-    qDebug() << "@@@@ abonents от net" << netType << "users=" << m_users.size();
+    qDebug() << "@@@getusers abonents от net" << netType << "users=" << m_users.size();
     QStringList list;
+    if (m_users.isEmpty())
+        return list;
     if (netType == -1) {
         int peersCount = 0;
         for (int i = 1; i < m_users.size(); ++i) {
-           if (m_users[i].isAlive) {
+            if (m_users[i].isAlive()) {
                if (!m_users[i].ip[0].isEmpty() ||
                !m_users[i].ip[1].isEmpty() ||
                !m_users[i].ip[2].isEmpty()) {
@@ -171,8 +173,9 @@ QStringList NetworkEngine::getUsers(int netType) {
     if (m_users[0].ip[netType].isEmpty())
         return list;
     for (int i = 1; i < m_users.size(); ++i) {
-        qDebug() << "user[" << i <<"]=" << &m_users[i].name << m_users[i].ip[0] << m_users[i].isAlive;
-        if (true || m_users[i].isAlive) {
+        qDebug() << "@@@getusers[" << i <<"]=" << m_users[i].name << m_users[i].ip[0] << m_users[i].isAlive()
+                 << m_users[i].lastPing << (QDateTime::currentMSecsSinceEpoch() - m_users[i].lastPing);
+        if (m_users[i].isAlive()) {
             if (netType == 0 && !m_users[i].ip[0].isEmpty()) list.append(m_users[i].name);
             else if (netType == 1 && !m_users[i].ip[1].isEmpty()) list.append(m_users[i].name);
             else if (netType == 2 && !m_users[i].ip[2].isEmpty()) list.append(m_users[i].name);
@@ -192,49 +195,6 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     QString name = obj["name"].toString();
     if (name != m_users[0].name)
         qDebug() << "@@@- parse=" << QString(data);
-#if 0
-    if (!m_users.isEmpty() &&  name == m_users.at(0).name) return;
-
-    int currentNetType = -1;
-    if (senderIpStr.startsWith("192.168.49.")) currentNetType = 2;
-    else if (senderIpStr.startsWith("192.168.43.") || senderIpStr.startsWith("192.168.137.")) currentNetType = 1;
-    else currentNetType = 0;
-
-    int peerIndex = -1;
-    for (int i = 1; i < m_users.size(); ++i) {
-        if (m_users[i].name == name) {
-            peerIndex = i;
-            break;
-        }
-    }
-
-    bool needSaveConfig = false;
-
-    if (peerIndex == -1) {
-        UserInfo newUser;
-        newUser.name = name;
-        newUser.isAlive = true;
-        newUser.ip[currentNetType] = senderIpStr;
-        m_users.append(newUser);
-        peerIndex = m_users.size() - 1;
-        needSaveConfig = true; // Появился новый друг — фиксируем в JSON!
-    }
-    else {
-        m_users[peerIndex].isAlive = true;
-        for (int i =0; i< 3; i++)
-        // Проверяем, изменился ли реальный IP-адрес пира на данном интерфейсе
-        if (m_users[peerIndex].ip[i] != senderIpStr) {
-            m_users[peerIndex].ip[i] = senderIpStr;
-            needSaveConfig = true;
-        }
-    }
-
-    // Если зафиксировано изменение сетевых адресов — мгновенно обновляем наш единый конфиг на диске
-    if (needSaveConfig) {
-        savePeersToConfig();
-        emit peerListChanged();
-    }
-#endif
     if (type == "incoming_call") {
         qDebug() << "@@@  incoming call 0" << QString(data);
         if (callInfo.busy())
@@ -274,6 +234,9 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         emit messageReceived(name, obj["text"].toString());
     }
     else if (type == "discovery") {
+#ifndef Q_OS_ANDROID
+        processDiscovery(name, obj);
+#endif
         emit peerListChanged();
     }
     else if (type == "start_audio_recording") {
@@ -449,49 +412,23 @@ void NetworkEngine::readConfig() {
     QJsonObject rootObj = doc.object();
 
     qDebug() << "@@@ read config 3";
-#ifndef Q_OS_ANDROID
     QJsonArray peersArray = rootObj["peers"].toArray();
-        for (int i = 0; i < 1/*peersArray.size()*/; ++i) {
-           QJsonObject peerObj = peersArray.at(i).toObject();
-            QString peerName = peerObj["name"].toString();
-           if (peerName.isEmpty())
-                peerName = "Анфиска";
-            qDebug() << "@@@ read config 3.2";
-           //if (peerName.isEmpty() || peerName == m_users.at(0).name) continue;
-
-            // Проверяем дубликаты на всякий случай
-            bool exists = false;
-            for (int j = 0; j < m_users.count(); ++j) {
-                if (m_users[j].name == peerName) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists) {
-                qDebug() << "@@@ read config 3.3";
-                UserInfo u;
-                qDebug() << "@@@ read config 3.4";
-                u.name = peerName;
-                //            savedUser.isAlive = false; // Они пока оффлайн, но в списке Петр ПОЯВИТСЯ!
-                u.isAlive = peerObj["isAlive"].toBool();
-                QJsonArray ipArr = peerObj["ip"].toArray();
-                if (ipArr.empty())
-                {
-                    for (int i = 0; i< 3; i++)
-                        ipArr.append("");
-                }
-                qDebug() << "@@@ read config 3.5 ipArr=" << ipArr;
-                for (int i =0; i< 3; i++)
-                    u.ip[i] = ipArr[i].toString();
-                m_users.append(u);
-                qDebug() << "@@@ read config 3.6";
-            }
-
-
+    if (!peersArray.isEmpty())
+    for (int i = 0; i < peersArray.size(); ++i) {
+        QJsonObject peerObj = peersArray.at(i).toObject();
+        qDebug() << "@@@ read config 3.2";
+        UserInfo u;
+        qDebug() << "@@@ read config 3.4";
+        u.name = peerObj["name"].toString();
+        u.lastPing = peerObj["lastPing"].toInteger();
+        QJsonArray ipArr = peerObj["ip"].toArray();
+        qDebug() << "@@@ read config 3.5 ipArr=" << ipArr;
+        for (int i =0; i< 3; i++)
+              u.ip[i] = ipArr[i].toString();
+        m_users.append(u);
+        qDebug() << "@@@ read config 3.6";
         }
-
     qDebug() << "@@@ read config 4" ;
-#endif
     if (rootObj.contains("lastCall"))
         {
         QJsonObject callObj = rootObj["lastCall"].toObject();
@@ -545,6 +482,31 @@ void NetworkEngine::readConfig() {
     qDebug() << "@@@ read config exit";
 
 }
+#ifndef Q_OS_ANDROID
+void NetworkEngine::saveConfig()
+{
+    QString fName = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
+    QFile file(fName);
+    file.open(QIODevice::WriteOnly);
+    QJsonDocument doc;
+    QJsonObject configObj;
+    QJsonArray peers;
+    for (int i =0; i< m_users.count(); i++)
+    {
+        QJsonObject peer;
+        peer["name"] = m_users[i].name;
+        QJsonArray ipArr;
+        for (int j = 0; j< 3; j++)
+            ipArr.append(m_users[i].ip[j]);
+        peer["ip"] = ipArr;
+        peers.append(peer);
+    }
+    configObj["peers"]= peers;
+    doc.setObject(configObj);
+    file.write(doc.toJson(QJsonDocument::Indented));
+    file.close();
+}
+#endif
 void NetworkEngine::saveName(const QString &name) {
 //    if (m_users.isEmpty()) return;
     qDebug()<< "@@@exc Try to save name 1" << name;
@@ -553,6 +515,8 @@ void NetworkEngine::saveName(const QString &name) {
 #ifdef Q_OS_ANDROID
     sendCommandToTeleLocService(0, m_users[0].name);
     qDebug()<< "@@@exc Try to save name 3" << name;
+#else
+    saveConfig();
 #endif
     m_users.resize (1);
     emit peerListChanged();
@@ -583,10 +547,6 @@ void NetworkEngine::savePeersToConfig() {
         readFile.close();
     }
 
-//    if (!rootObj.contains("my_name")) {
-//        rootObj["my_name"] = m_users[0].name;
-//    }
-
     // Сериализуем всех друзей из оперативной памяти в JSON-массив
     QJsonArray peersArray;
     for (int i = 1; i < m_users.size(); ++i) {
@@ -596,7 +556,7 @@ void NetworkEngine::savePeersToConfig() {
         for (int j =0; j<3; j++)
             ipArray.append(m_users[i].ip[j]);
         peerObj["ip"] = ipArray;
-        peerObj["isAlive"]=true; //m_users[i].isAlive;
+        peerObj["lastPing"]=true; //m_users[i].isAlive;
         peersArray.append(peerObj);
     }
     rootObj["peers"] = peersArray;
@@ -641,7 +601,57 @@ void NetworkEngine::rejectBusy(const QString &ip)
     }
 
 }
+#ifndef Q_OS_ANDROID
+void NetworkEngine::processDiscovery(const QString &name, const QJsonObject & obj)
+{
+    if (name == m_users[0].name)
+        return;
+    QJsonArray ipArr = obj["ip"].toArray();
+    QString  ip[3];
+    for (int i =0; i< 3; i++)
+        ip[i]= ipArr.at(i).toString();
+    for (int i = 0; i< m_users.count(); i++)
+        if (name == m_users[i].name)
+        {
+            for (int j = 0; j<3; j++)
+                m_users[i].ip[j] = ip[j];
+            m_users[i].lastPing = QDateTime::currentMSecsSinceEpoch();
 
+            for (int j = 1; j< m_users.count(); j++)
+            {
+                if (i==j) continue;
+                for (int k = 0; k< 3; k++)
+                    if(ip[k] !="" && m_users[j].ip[k] == ip[k])
+                    {
+                        m_users.remove(j);
+                        j--;
+                        goto nextj;
+                    }
+            nextj:;
+            }
+            saveConfig();
+            return;
+        }
+    UserInfo u;
+    u.name = name;
+    for (int j = 0; j<3; j++)
+        u.ip[j] = ip[j];
+    u.lastPing = QDateTime::currentMSecsSinceEpoch();
+    m_users.append(u);
+    for (int j = 1; j< m_users.count() -1; j++)
+    {
+        for (int k = 0; k< 3; k++)
+            if(ip[k] !="" && m_users[j].ip[k] == ip[k])
+            {
+                m_users.remove(j);
+                j--;
+                goto nextj1;
+            }
+    nextj1:;
+    }
+ret: saveConfig();
+}
+#endif
 void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) {
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
@@ -663,7 +673,7 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
         }
         if (!udpSent || !me.ip[2].isEmpty()) {
             for (int i = 1; i < m_users.size(); ++i) {
-                if (m_users[i].isAlive && !m_users[i].ip[2].isEmpty()) {
+                if (m_users[i].isAlive() && !m_users[i].ip[2].isEmpty()) {
                     QTcpSocket tmpSocket;
                     tmpSocket.connectToHost(m_users[i].ip[2], PORT);
                     if (tmpSocket.waitForConnected(500)) {
@@ -677,7 +687,7 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
     }
     QString targetIp = "";
     for (int i = 1; i < m_users.size(); ++i) {
-        if (m_users[i].name == targetPeer && m_users[i].isAlive) {
+        if (m_users[i].name == targetPeer && m_users[i].isAlive()) {
             if (!m_users[i].ip[0].isEmpty() && !me.ip[0].isEmpty()) targetIp = m_users[i].ip[0];
             else if (!m_users[i].ip[1].isEmpty() && !me.ip[1].isEmpty()) targetIp = m_users[i].ip[1];
             else if (!m_users[i].ip[2].isEmpty() && !me.ip[2].isEmpty()) targetIp = m_users[i].ip[2];
@@ -853,7 +863,7 @@ void NetworkEngine::configFromString(const QString &sconf)
         qDebug() << "@@@ configFromString 3. user[" << i << "]=" << peerObj;
         UserInfo u;
         u.name = peerName;
-        u.isAlive = peerObj["isAlive"].toBool();
+        u.lastPing = peerObj["lastPing"].toInteger();
         QJsonArray ipArr = peerObj["ip"].toArray();
         for (int i =0; i< 3; i++)
          u.ip[i] = ipArr[i].toString();
@@ -868,9 +878,10 @@ void NetworkEngine::debugUsers(){
         qDebug() << "@@@ User:" << m_users[i].name << "LAN:"
             << m_users[i].ip[0]
             << "AP:" << m_users[i].ip[1] << "Direct:"
-            << m_users[i].ip[2] << "Alive:" << m_users[i].isAlive;
+                 << m_users[i].ip[2] << "Alive:" << m_users[i].isAlive();
     }
 }
+#if 0
 QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
     QList<UserInfo> activeUsers;
     QString configPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
@@ -900,7 +911,7 @@ QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
                     u.name = name;
                     for (int i =0; i< 3; i++)
                     u.ip[i] = ipArr[i].toString();
-                    u.isAlive = true;
+                    u.lastPing = true;
                     activeUsers.append(u);
                     qDebug() << "@@@ " << "u=" << u.name;
                 }
@@ -909,7 +920,7 @@ QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
     }
     return activeUsers;
 }
-
+#endif
 void NetworkEngine::debugMsg(const QString &s)
 {
     emit messageReceived("Dbg" , s);
@@ -1025,3 +1036,5 @@ void NetworkEngine::sendCommandToTeleLocService(int commandId, const QString &pa
     }
 }
 #endif
+
+bool UserInfo::isAlive() const {return QDateTime::currentMSecsSinceEpoch() - lastPing < 600000;}

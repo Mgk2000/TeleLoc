@@ -7,7 +7,6 @@
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
     <!-- %%INSERT_PERMISSIONS -->
-	    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Базовые и сетевые разрешения -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -22,7 +21,9 @@
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <!-- Разрешения для надежной фоновой работы в Android 14+ -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<!-- Для Android 14+ (API 34) -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" /> <!-- НОВОЕ: Перевод службы на аудио-звонки -->
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />             <!-- НОВОЕ: Пробитие блокировок запуска окон -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />       <!-- НОВОЕ: Автозапуск после перезагрузки -->
@@ -41,7 +42,6 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 	<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 <!-- Разрешение для поиска устройств по Wi-Fi без геолокации (Android 13+) -->
 <uses-permission 
     android:name="android.permission.NEARBY_WIFI_DEVICES" 
@@ -103,11 +103,15 @@
         </service>
         <!-- Автономный системный приёмник, караулящий импульсы подъёма из глубокого сна -->
         <receiver android:name="org.qtproject.example.appTeleLoc.TeleLocWakeReceiver"
-                  android:exported="true">
+                  android:exported="true"
+				  android:enabled="true" 
+				  android:directBootAware="true"> <!-- Позволяет работать до ввода пароля -->
             <intent-filter>
                 <!-- Системный фильтр, который Android разрешает будить по сети -->
                 <action android:name="org.qtproject.example.appTeleLoc.WAKE_UP_ACTION" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" /> <!-- Для режима шифрования -->
+
             </intent-filter>
         </receiver>
 

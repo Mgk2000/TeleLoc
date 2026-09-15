@@ -3,26 +3,26 @@ package org.qtproject.example.appTeleLoc;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
 import android.util.Log;
-import org.qtproject.example.appTeleLoc.TeleLocService;
 
 public class TeleLocWakeReceiver extends BroadcastReceiver {
-    private static final String TAG = "TeleLocWakeReceiver";
+    private static final String TAG = "TeleLocBoot";
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        Log.d(TAG, "@@@ РЕСИВЕР: Система включилась! Поднимаю фоновую службу...");
-        Intent serviceIntent = new Intent(context, TeleLocService.class);
+        String action = intent.getAction();
+        Log.d(TAG, "Ресивер поймал: " + action + ". Запускаем службу...");
+
+        // Создаем интент на службу через полное имя класса
+        Intent serviceIntent = new Intent();
+        serviceIntent.setClassName("org.qtproject.example.appTeleLoc", "org.qtproject.example.appTeleLoc.TeleLocService");
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent);
-            } else {
-                context.startService(serviceIntent);
-            }
-            Log.d(TAG, "@@@ РЕСИВЕР: Команда на запуск службы отправлена успешно.");
+            // Запускаем как ОБЫЧНУЮ службу (не foreground). В Direct Boot это разрешено!
+            context.startService(serviceIntent);
+            Log.d(TAG, "Обычный старт TeleLocService выполнен.");
         } catch (Exception e) {
-            Log.e(TAG, "@@@ РЕСИВЕР ОШИБКА запуска службы: " + e.getMessage());
+            Log.e(TAG, "Ошибка старта службы: " + e.getMessage());
         }
     }
 }

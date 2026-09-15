@@ -18,7 +18,8 @@ class QLocalSocket;
 struct UserInfo {
     QString name;
     QString ip[3];
-    bool isAlive;
+    qint64 lastPing;
+    bool isAlive () const;
 };
 struct CallInfo {
     enum State {idle, inCalling, outCalling, speaking};
@@ -50,7 +51,7 @@ public:
     Q_INVOKABLE void debugUsers();
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
-    QList<UserInfo> loadPeersFromConfig();
+    //QList<UserInfo> loadPeersFromConfig();
     void debugMsg(const QString& s);
     void unpressCallButtons();
     void pressCallButon(int _netType);
@@ -114,6 +115,9 @@ private:
     void unixSendAlivePing();
     bool firstAlive = true;
     void sendCommandToTeleLocService(int commandId, const QString &payload);
+#else
+    void processDiscovery(const QString & name, const QJsonObject & obj);
+    void saveConfig();
 #endif
     QTimer* m_unixAliveTimer;
 

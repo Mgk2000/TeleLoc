@@ -16,7 +16,39 @@
 #include <android/log.h>
 
 #endif
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
 
+void applyOrientationBasedOnDeviceType() {
+#ifdef Q_OS_ANDROID
+    // 1. Получаем объект текущей Activity
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative",
+        "activity",
+        "()Landroid/app/Activity;"
+        );
+
+    if (!activity.isValid()) return;
+
+    // 2. Получаем конфигурацию устройства
+    QJniObject resources = activity.callObjectMethod("getResources", "()Landroid/content/res/Resources;");
+    QJniObject configuration = resources.callObjectMethod("getConfiguration", "()Landroid/content/res/Configuration;");
+
+    // Получаем поле smallestScreenWidthDp (минимальная ширина экрана в dp)
+    jint smallestScreenWidthDp = configuration.getField<jint>("smallestScreenWidthDp");
+
+    // Google Standard: sw600dp и выше — это планшеты (7 дюймов и более)
+    bool isTablet = (smallestScreenWidthDp >= 600);
+
+    // 3. Задаем ориентацию:
+    // 0 = SCREEN_ORIENTATION_LANDSCAPE (альбомная)
+    // 1 = SCREEN_ORIENTATION_PORTRAIT (книжная)
+    jint requestedOrientation = isTablet ? 0 : 1;
+
+    // Принудительно устанавливаем ориентацию
+    activity.callMethod<void>("setRequestedOrientation", "(I)V", requestedOrientation);
+#endif
+}
 int main(int argc, char *argv[])
 {
 #ifdef WIN32
@@ -27,6 +59,8 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
 #ifdef Q_OS_ANDROID
     qDebug() << "@@@ TeleLoc started";
+    applyOrientationBasedOnDeviceType();
+
     // ФОРСИРОВАННЫЙ ЗАПРОС ПРАВ ДЛЯ QT 6.8.3 (Официальная сигнатура из одной строки)
     QStringList permissions = {
         "android.permission.RECORD_AUDIO",

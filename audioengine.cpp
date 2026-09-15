@@ -1,4 +1,5 @@
 #include "audioengine.h"
+#include "networkengine.h"
 #include <unistd.h>
 
 #include <QDir>
@@ -10,7 +11,8 @@ AudioEngine::AudioEngine(QObject *parent)
     , m_audioSource(nullptr)
     , m_audioSink(nullptr)
     , m_audioInputDevice(nullptr)
-    , m_audioOutputDevice(nullptr)
+    , m_audioOutputDevice(nullptr),
+    netEngine ((NetworkEngine *) parent )
 {
     m_udpAudioReceiver = new QUdpSocket(this);
     m_udpAudioSender = new QUdpSocket(this);
@@ -34,7 +36,9 @@ AudioEngine::AudioEngine(QObject *parent)
     m_unixSizeSenderNet = 0;
     m_unixSizeReceiverNet = 0;
     m_unixSizeReceiverOut = 0;
-    m_unixCurrentRole = "none";    m_unixIsMuted = false;
+    m_unixCurrentRole = "none";
+    m_unixIsMuted = false;
+   // startAudioTimer();
 }
 void AudioEngine::startRecording(const QString &targetIp)
 {
@@ -100,8 +104,9 @@ void AudioEngine::onReadyReadUdp()
     while (m_udpAudioReceiver->hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
-        m_udpAudioReceiver->readDatagram(datagram.data(), datagram.size());
-
+        int dataSize = datagram.size();
+        m_udpAudioReceiver->readDatagram(datagram.data(), dataSize );
+        inAudioSize += dataSize;
         m_ringBuffer.append(datagram);
 
         if (m_ringBuffer.size() > 19200) {
@@ -302,4 +307,19 @@ void AudioEngine::writeWavHeader(QFile &file, int dataSize)
     out << static_cast<quint16>(16);
     out.writeRawData("data", 4);
     out << static_cast<quint32>(dataSize);
+}
+
+void AudioEngine::startAudioTimer()
+{
+//    connect(audioTimer, SIGNAL(timeout()), this, SLOT(onTimer()) );
+    connect(&audioTimer, SIGNAL(timeout()), this, SLOT(onTimer()) );
+audioTimer.start(1000);
+}
+
+void AudioEngine::onTimer()
+{
+    qDebug() << "@@@audio in=" << inAudioSize << "out=" << outAuioSize << "audidevice=" <<
+        !! m_audioInputDevice << !!m_audioOutputDevice;
+    inAudioSize = 0;
+    outAuioSize = 0;
 }
