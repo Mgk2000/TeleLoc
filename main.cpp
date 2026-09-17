@@ -123,7 +123,6 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     NetworkEngine netEngine;
-
 #ifdef Q_OS_ANDROID
     // БЛОК 4: НЕЗАВИСИМЫЙ ДИНАМИЧЕСКИЙ ЗАПУСК ФОНОВОЙ СЛУЖБЫ НА ПОРТУ 28500
     QTimer::singleShot(1000, []() {
@@ -200,6 +199,8 @@ int main(int argc, char *argv[])
 
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
     engine.rootContext()->setContextProperty("AudioEngine", netEngine.audioEngine);
+    engine.rootContext()->setContextProperty("myUsersModel", netEngine.usersModel);
+
     const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
         &app, [url](QObject *obj, const QUrl &objUrl) {

@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-
+import QtQuick.Layouts
 ApplicationWindow {
     id: window
     visible: true
@@ -109,46 +109,6 @@ ApplicationWindow {
                 height: 50
                 spacing: 8
 
-                Button {
-                    id: chatMenuButton
-                    width: 50
-                    height: 50
-                    background: Rectangle {
-                        color: window.activeChatPeer !== "" ? "#e74c3c" : "#3498db"
-                        radius: 8
-                    }
-                    contentItem: Text {
-                        text: "📝"
-                        font.pixelSize: 20
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        while (chatMenu.count > 0) {
-                            var item = chatMenu.takeItem(0)
-                            if (item) item.destroy()
-                        }
-                        var users = netEngine.getUsers(-1 | 0)
-                        for (var i = 0; i < users.length; ++i) {
-                            var currentName = users[i]
-                            var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', chatMenu)
-                            if (menuItem) {
-                                chatMenu.addItem(menuItem)
-                                menuItem.triggered.connect((function(name) {
-                                    return function() {
-                                        window.activeChatPeer = name
-                                    }
-                                })(currentName))
-                            }
-                        }
-                        chatMenu.open()
-                    }
-
-                    Menu {
-                        id: chatMenu
-                        title: "Чат с..."
-                    }
-                }
 
                 Button {
                     id: settingsButton
@@ -400,6 +360,46 @@ ApplicationWindow {
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
+                Button {
+                    id: chatMenuButton
+                    width: 50
+                    height: 50
+                    background: Rectangle {
+                        color: window.activeChatPeer !== "" ? "#e74c3c" : "#3498db"
+                        radius: 8
+                    }
+                    contentItem: Text {
+                        text: "📝"
+                        font.pixelSize: 20
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: {
+                        while (chatMenu.count > 0) {
+                            var item = chatMenu.takeItem(0)
+                            if (item) item.destroy()
+                        }
+                        var users = netEngine.getUsers(-1 | 0)
+                        for (var i = 0; i < users.length; ++i) {
+                            var currentName = users[i]
+                            var menuItem = Qt.createQmlObject('import QtQuick.Controls; MenuItem { text: "' + currentName + '" }', chatMenu)
+                            if (menuItem) {
+                                chatMenu.addItem(menuItem)
+                                menuItem.triggered.connect((function(name) {
+                                    return function() {
+                                        window.activeChatPeer = name
+                                    }
+                                })(currentName))
+                            }
+                        }
+                        chatMenu.open()
+                    }
+
+                    Menu {
+                        id: chatMenu
+                        title: "Чат с..."
+                    }
+                }
 
                 Text {
                     id: statusText
@@ -510,6 +510,7 @@ ApplicationWindow {
         }
     }
     ListView {
+        visible: false
         id: chatListView
         width: parent.width
         anchors.top: toolbar.bottom
@@ -563,16 +564,206 @@ ApplicationWindow {
             }
         }
     }
+    ListView {
+        id: usersList
+        model: myUsersModel // Наша C++ модель
+        spacing: 8
+        anchors.top: toolbar.bottom // Привязываем верх к низу тулбара
+        anchors.bottom: parent.bottom // Привязываем низ к низу окна
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: 10 // Оступы со всех сторон, если нужны
+        delegate: Rectangle {
+            width: parent.width
+            height: 60
+            color: "#f5f5f5"
+            radius: 6
+            border.color: "#e0e0e0"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 5
+
+                // 1. Имя пользователя
+                Text {
+                    text: userName // Роль NameRole
+                    font.pixelSize: 16
+                    font.bold: true
+                    // Если жив — зеленый, иначе — темно-серый
+                    color: isAlive ? "#2e7d32" : "#555555"
+//                    Layout.fillWidth: true
+                    Layout.preferredWidth: 80
+
+                    elide: Text.ElideRight
+                }
+
+                // 2. Кнопка: Локальная сеть (Роутер) - Зеленая
+                Button {
+                    enabled: ipLocal !== "" // Активна, если IP есть
+/*                    text: "📞" // Вместо текста можно использовать icon.source: "qrc:/icons/phone.png"
+                    Layout.preferredWidth: 60
+                        Layout.preferredHeight: 60
+                    background: Rectangle {
+                        implicitWidth: 60
+                        implicitHeight: 60
+                        radius: 30
+                        // Меняем прозрачность, если кнопка disabled
+                        color: parent.enabled ? "#4caf50" : "#b0bec5"
+                    }*/
+//                    width: 50
+//                    height: 70
+//                    Layout.preferredWidth: 60
+//                        Layout.preferredHeight: 60
+                    background: Rectangle {
+                        width: 60
+                        height: 70
+                        color: parent.enabled ? "#4caf50" : "#b0bec5"
+                        radius: 8
+                    }
+                    contentItem: Text {
+//                        text: "📱📞"
+                        text: "📞"
+                        font.pixelSize: 14
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    onClicked: {
+                        customCallScreen.callerName = userName
+                         customCallScreen.callNetType = 0
+                         customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                        customCallScreen.open() // Открываем!
+
+                        console.log("Звонок ", userName , " по локальной сети на " + ipLocal)
+                    }
+                }
+
+                // 3. Кнопка: Хот-спот - Голубая
+                Button {
+                    enabled: ipSpot !== ""
+/*                    text: "📞"
+                    Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+
+                    background: Rectangle {
+                        implicitWidth: 40
+                        implicitHeight: 40
+                        radius: 20
+                        color: parent.enabled ? "#03a9f4" : "#b0bec5"
+                    }*/
+//                width: 50
+//                height: 70
+                background: Rectangle {
+                    width: 50
+                    height: 70
+                    color: parent.enabled ? "#03a9f4" : "#b0bec5"
+                    radius: 8
+                }
+                contentItem: Text {
+                    text: "📞"
+                    font.pixelSize: 14
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: {
+                    customCallScreen.callerName = userName
+                     customCallScreen.callNetType = 1
+                     customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                    customCallScreen.open() // Открываем!
+
+                    console.log("Звонок ", userName , " по локальной сети на " + ipSpot)
+                }
+                }
+
+                // 4. Кнопка: Wi-Fi Direct - Фиолетовая
+                Button {
+                    enabled: ipDirect !== ""
+/*                    text: "📞"
+                    Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+
+                    background: Rectangle {
+                        implicitWidth: 40
+                        implicitHeight: 40
+                        radius: 20
+                        color: parent.enabled ? "#9c27b0" : "#b0bec5"
+                    }*/
+                    background: Rectangle {
+                        width: 50
+                        height: 70
+                        color: parent.enabled ? "#9c27b0" : "#b0bec5"
+                        radius: 8
+                    }
+                    contentItem: Text {
+                        text: "📞"
+                        font.pixelSize: 14
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: {
+                        customCallScreen.callerName = userName
+                         customCallScreen.callNetType = 2
+                         customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                        customCallScreen.open() // Открываем!
+                        console.log("Звонок ", userName , " по локальной сети на " + ipDirect)
+                    }
+                }
+
+                // Разделитель перед чатом
+                Rectangle {
+                    width: 1
+                    Layout.fillHeight: true
+                    color: "#d0d0d0"
+                }
+
+                // 5. Кнопка: Текстовый чат
+                Button {
+                    enabled: ipLocal !== "" || ipSpot !== "" || ipDirect !== ""
+/*                    text: "📝"
+                    // Чат доступен, если доступна хотя бы одна сеть
+                    Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+
+                    background: Rectangle {
+                        implicitWidth: 40
+                        implicitHeight: 40
+                        radius: 6
+                        color: parent.enabled ? "#ff9800" : "#e0e0e0"
+                    }*/
+                    background: Rectangle {
+                        width: 50
+                        height: 70
+                        color: parent.enabled ? "#ff9800" : "#e0e0e0"
+                        radius: 8
+                    }
+                    contentItem: Text {
+                        text: "📝"
+                        font.pixelSize: 14
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: {
+                        chatListView.visible = true
+                        usersList.visible = false
+                        messageInputRow.visible = true
+                        console.log("Чат с", userName )
+
+                    }
+                }
+            }
+        }
+    }
 
     Row {
         id: messageInputRow
+        visible: false
         width: parent.width
         height: 50
         spacing: 5
         anchors.bottom: parent.bottom
         anchors.margins: 5
-        visible: window.activeChatPeer !== ""
-
+//        visible: window.activeChatPeer !== ""
         TextField {
             id: messageField
             width: parent.width - 65

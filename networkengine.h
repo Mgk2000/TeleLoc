@@ -11,6 +11,8 @@
 #include <QSoundEffect>
 #include <QUrl>
 #include <QTimer>
+#include <QAbstractListModel>
+#include <QDateTime>
 #include "audioengine.h"
 class QLocalServer;
 class QLocalSocket;
@@ -32,7 +34,7 @@ struct CallInfo {
         return state != idle;
     }
 };
-
+class UsersModel;
 class NetworkEngine : public QObject
 {
     Q_OBJECT
@@ -58,6 +60,7 @@ public:
     Q_INVOKABLE bool activeNetType();
     CallInfo callInfo;
     AudioEngine *audioEngine;
+    UsersModel* usersModel;
 
     QByteArray getCallData(int netType);
     Q_INVOKABLE void masterStartRecording();
@@ -65,7 +68,8 @@ public:
 
     void sendTCP(const QString &command);
     void configFromString(const QString & sconf);
-
+    void setUsersModel(UsersModel* _model)
+        {usersModel = _model;}
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -109,6 +113,7 @@ private:
     void reject(const QString & ip);
     void rejectBusy(const QString & ip);
     qint64 lastReadConfigTime = 0;
+
 #ifdef Q_OS_ANDROID
     QLocalServer* m_unixServer = 0;
     QLocalSocket* m_unixClientSocket;
@@ -133,6 +138,70 @@ private:
     void setNetType(int _netType);
 
     void deleteLastCall();
+};
+
+class UsersModel : public QAbstractListModel
+{
+    Q_OBJECT
+public:
+    enum UserRoles {
+        NameRole = Qt::UserRole + 1,
+        IpLocalRole,
+        IpSpotRole,
+        IpDirectRole,
+        IsAliveRole
+    };
+
+    explicit UsersModel(QObject *parent) : QAbstractListModel(parent)
+    {
+        netEngine = (NetworkEngine*) parent;
+    }
+
+    // Метод для заполнения модели вашими данными
+    void setUsers(const QList<UserInfo> &users) {
+        for (int i =0; i< users.count(); i++)
+            qDebug() << "@@@setUsers " << i << users[i].name;
+        beginResetModel();
+        m_users = users;
+        endResetModel();
+    }
+
+    // Обязательные методы для переопределения
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override {
+        if (parent.isValid()) return 0;
+        return m_users.size();
+    }
+
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override {
+        if (!index.isValid() || index.row() >= m_users.size()) return QVariant();
+
+        const auto &user = m_users[index.row()];
+
+        switch (role) {
+        case NameRole:     return user.name;
+        case IpLocalRole:  return user.ip[0];
+        case IpSpotRole:   return user.ip[1];
+        case IpDirectRole: return user.ip[2];
+        case IsAliveRole:  return user.isAlive();
+        default:           return QVariant();
+        }
+    }
+
+protected:
+    QHash<int, QByteArray> roleNames() const override {
+        QHash<int, QByteArray> roles;
+        roles[NameRole]     = "userName";
+        roles[IpLocalRole]  = "ipLocal";
+        roles[IpSpotRole]   = "ipSpot";
+        roles[IpDirectRole] = "ipDirect";
+        roles[IsAliveRole]  = "isAlive";
+        return roles;
+    }
+
+private:
+    QList<UserInfo> m_users;
+    NetworkEngine * netEngine;
+
 };
 
 #endif // NETWORKENGINE_H

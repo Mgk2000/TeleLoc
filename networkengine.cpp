@@ -60,6 +60,8 @@ NetworkEngine::NetworkEngine(QObject *parent)
 
     readConfig();
     qDebug() << "@@@ NetworkEngine::NetworkEngine 3";
+    usersModel = new UsersModel(this);
+    usersModel->setUsers(m_users);
 
     qDebug() << "@@@ NetworkEngine::NetworkEngine 4";
 #ifndef Q_OS_ANDROID
