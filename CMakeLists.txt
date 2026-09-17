@@ -34,6 +34,7 @@ qt_add_qml_module(appTeleLoc
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
     QML_FILES Main.qml
+    CallScreenPopup.qml
     RESOURCES
         ringtone.wav
         ringback.wav

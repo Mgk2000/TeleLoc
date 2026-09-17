@@ -84,6 +84,7 @@ private slots:
     void onReadyUdpRead();
 #ifndef Q_OS_ANDROID
     void sendDiscovery();
+    void updateInterfaces();
 #else
     void m_unixOnNewConnection();
     void m_unixSendAlivePing();

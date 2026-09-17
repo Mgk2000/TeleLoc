@@ -50,7 +50,7 @@ NetworkEngine::NetworkEngine(QObject *parent)
     connect(tcpServer, &QTcpServer::newConnection, this, &NetworkEngine::onNewConnection);
 
     // C++ ядро слушает свой порт 28000 на всех платформах
-    tcpServer->listen(QHostAddress::Any, PORT);
+    tcpServer->listen(QHostAddress::Any, 28000 /*PORT*/);
 
     tcpSocket = new QTcpSocket(this);
     connect(tcpSocket, &QTcpSocket::readyRead, this, &NetworkEngine::onReadyTcpRead);
@@ -288,7 +288,10 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 3 для:" << name;
 
     tcpSocket->abort();
+#ifdef Q_OS_ANDROID
     tcpSocket->connectToHost(targetIp, 28500);
+#endif
+
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 4 для:" << name;
 
     if (tcpSocket->waitForConnected(3000)) {
@@ -330,7 +333,7 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
         tcpSocket->waitForBytesWritten(500);
     }
 
-
+    qDebug() << "$$$ before audioEngine->startRecording" << callInfo.ip;
     audioEngine->startRecording(callInfo.ip);
 }
 void NetworkEngine::sendTCP(const QString& command)
@@ -373,6 +376,7 @@ void NetworkEngine::stopAudioCall() {
     if (!targetIp.isEmpty() && tcpSocket) {
         tcpSocket->abort();
         tcpSocket->connectToHost(targetIp, PORT);
+        qDebug() << "@@@ StopAudio connect to" << targetIp << PORT;
         if (tcpSocket->waitForConnected(500)) {
             tcpSocket->write(data);
             tcpSocket->waitForBytesWritten(500);
@@ -511,12 +515,12 @@ void NetworkEngine::saveConfig()
 #endif
 void NetworkEngine::saveName(const QString &name) {
 //    if (m_users.isEmpty()) return;
-    qDebug()<< "@@@exc Try to save name 1" << name;
+//    qDebug()<< "@@@exc Try to save name 1" << name;
     m_users[0].name = name.trimmed();
     qDebug()<< "@@@exc Try to save name 2" << name;
 #ifdef Q_OS_ANDROID
     sendCommandToTeleLocService(0, m_users[0].name);
-    qDebug()<< "@@@exc Try to save name 3" << name;
+//    qDebug()<< "@@@exc Try to save name 3" << name;
 #else
     saveConfig();
 #endif
@@ -720,6 +724,7 @@ QByteArray NetworkEngine::getCallData(int netType)
 #ifndef Q_OS_ANDROID
 void NetworkEngine::sendDiscovery() {
     if (m_users.isEmpty()) return;
+    updateInterfaces();
     UserInfo me = m_users.at(0);
     QJsonObject obj;
     obj["type"] = "discovery";
@@ -758,7 +763,8 @@ void NetworkEngine::onReadyTcpRead() {
     QByteArray data = senderSocket->readAll();
     //QString sdata = data1;
     //QByteArray data(sdata.toUtf8());
-    qDebug() << "@@@NetworkEngine::onReadyTcpRead() 2" << QString(data);
+    qDebug() << "@@@ parse NetworkEngine::onReadyTcpRead() 2" << QString(data)
+             << "port=" << senderSocket->localPort();
     QString ip = senderSocket->peerAddress().toString().toLower();
     if (ip.startsWith("::ffff:"))
         ip.remove("::ffff:");
@@ -773,7 +779,7 @@ void NetworkEngine::onReadyUdpRead() {
         udpSocket->readDatagram(datagram.data(), datagram.size(), &senderHost);
         QString s (datagram);
         if (!s.contains("discovery"))
-            qDebug() << "@@@@@@@@@@@@@@@@@@@@@onReadyUdpRead" << s;
+            qDebug() << "@@@ parse onReadyUdpRead@@@@@@@@onReadyUdpRead" << s;
         parseIncomingSyncData(datagram, senderHost.toString());
     }
 }
@@ -854,15 +860,15 @@ void NetworkEngine::configFromString(const QString &sconf)
     if (doc.isNull() || !doc.isObject()) {
         return;
     }
-    qDebug() << "@@@configFromString 1";
+    //qDebug() << "@@@configFromString 1";
     QJsonObject rootObj = doc.object();
     m_users.clear();
-    qDebug() << "@@@ configFromString 2";
+    //qDebug() << "@@@ configFromString 2";
     QJsonArray peersArray = rootObj["peers"].toArray();
     for (int i = 0; i < peersArray.size(); ++i) {
         QJsonObject peerObj = peersArray.at(i).toObject();
         QString peerName = peerObj["name"].toString();
-        qDebug() << "@@@ configFromString 3. user[" << i << "]=" << peerObj;
+      //  qDebug() << "@@@ configFromString 3. user[" << i << "]=" << peerObj;
         UserInfo u;
         u.name = peerName;
         u.lastPing = peerObj["lastPing"].toInteger();
@@ -997,7 +1003,7 @@ Java_org_qtproject_example_appTeleLoc_TeleLocService_sendDataToCpp(
 
     QString data = QJniObject(jdata).toString();
     int id = eventId;
-    qDebug() << "@@@exc [C++] ДАННЫЕ ИЗ JAVA ПОЛУЧЕНЫ." << eventId << data;
+   // qDebug() << "@@@exc [C++] ДАННЫЕ ИЗ JAVA ПОЛУЧЕНЫ." << eventId << data;
     switch(id)
     {
     case 0:
@@ -1042,3 +1048,27 @@ void NetworkEngine::sendCommandToTeleLocService(int commandId, const QString &pa
 bool UserInfo::isAlive() const {
     return true|| QDateTime::currentMSecsSinceEpoch() - lastPing < 600000;
 }
+#ifndef Q_OS_ANDROID
+void NetworkEngine::updateInterfaces() {
+    if (m_users.isEmpty()) return;
+    m_users[0].ip[0] = "";
+    m_users[0].ip[1] = "";
+    m_users[0].ip[2] = "";
+    QList<QHostAddress> list = QNetworkInterface::allAddresses();
+    qDebug() << "@@@ Alladdreses=" << list;
+    for (int i = 0; i < list.count(); i++) {
+        if (!list[i].isLoopback() && list[i].protocol() == QAbstractSocket::IPv4Protocol) {
+            QString ip = list[i].toString();
+            qDebug() << "@@@Interface[" << i << "]=" << ip;
+            if (ip.startsWith("192.168.49.")) m_users[0].ip[2] = ip;
+            else if (ip.startsWith("192.168.43.") ||
+                     ip.startsWith("192.168.137.") ||
+                     ip.startsWith("10.")) m_users[0].ip[1] = ip;
+            else if (ip.startsWith("192.168."))
+                m_users[0].ip[0] = ip;
+        }
+    }
+    m_users[0].name = getSavedName();
+}
+
+#endif

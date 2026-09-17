@@ -9,7 +9,10 @@ ApplicationWindow {
     width: 360
     height: 640
     title: "TeleLoc Рация"
-
+    // Объявляем нашу новую полноэкранную звонилку
+     CallScreenPopup {
+         id: customCallScreen
+     }
     property string activeChatPeer: ""
     property string savedName: "Полосарь"
     property string activeConferencePeers: ""
@@ -52,9 +55,15 @@ ApplicationWindow {
             })
         }
         function onIncomingCall(peerName, netType) {
-           incomingCallDialog.callerName = peerName
-            incomingCallDialog.callNetType = netType
-            incomingCallDialog.open()
+        //   incomingCallDialog.callerName = peerName
+        //    incomingCallDialog.callNetType = netType
+        //    incomingCallDialog.open()
+            customCallScreen.callerName = peerName
+             customCallScreen.callNetType = netType
+             customCallScreen.isIncoming = true // Флаг: входящий звонок
+
+             customCallScreen.open() // Открываем!
+
         }
         function onCallAccepted() {
             statusText.text = "Разговор"
@@ -62,7 +71,8 @@ ApplicationWindow {
         function onCallStopped() {
             micIndicatorText.text = "🎤 0%"
             netIndicatorText.text = "🔊 0%"
-            incomingCallDialog.close()
+            //incomingCallDialog.close()
+            customCallScreen.close()
             callLanMenu.close()
             callApMenu.close()
             callDirectMenu.close()
@@ -256,7 +266,12 @@ ApplicationWindow {
                                         return function() {
                                             window.activeConferencePeers = name
                                             window.activeCallNetType = 0
-                                            netEngine.startAudioCall(name, 0 | 0)
+                                            customCallScreen.callerName = name
+                                             customCallScreen.callNetType = 0
+                                             customCallScreen.isIncoming = false // Флаг: входящий звонок
+
+                                             customCallScreen.open() // Открываем!
+                                            //netEngine.startAudioCall(name, 0 | 0)
                                         }
                                     })(currentName))
                                 }

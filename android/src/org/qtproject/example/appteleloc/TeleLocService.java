@@ -356,23 +356,23 @@ private void setName(String name)
                 try {
                     //if (us <=0 || users.get(0).name.equals(""))
                     //return;
-                    Log.d(TAG, "@@@sendiscovery 0 isRunning=" + isProcessRunning());
+    //                Log.d(TAG, "@@@sendiscovery 0 isRunning=" + isProcessRunning());
                     if (users.isEmpty()){
                     Thread.sleep(3000);
-                    Log.d(TAG, "@@@sendiscovery 1 users.isEmpty()");
+     //               Log.d(TAG, "@@@sendiscovery 1 users.isEmpty()");
                     return;
                     }
                     Thread.sleep(3000);
-                    Log.d(TAG, "@@@sendiscovery 2    ");
+     //               Log.d(TAG, "@@@sendiscovery 2    ");
                     java.io.File file = new java.io.File(configPath);
                     String myName = users.get(0).name;
-                    Log.d(TAG,"@@@sss config="+ configPath+"exists="+file.exists()) ;
+     //               Log.d(TAG,"@@@sss config="+ configPath+"exists="+file.exists()) ;
                     if (file.exists()) {
                         java.io.FileInputStream fis = new java.io.FileInputStream(file);
                         byte[] data = new byte[(int) file.length()];
                         fis.read(data);
                         fis.close();
-                        Log.d(TAG, "@@@ssd data=" + data + data.length);
+     //                   Log.d(TAG, "@@@ssd data=" + data + data.length);
                         if (data.length <=0)
                         return;
                         org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
@@ -393,7 +393,7 @@ private void setName(String name)
                 byte[] bytes = json.getBytes("UTF-8");
                 java.net.DatagramSocket socket = new java.net.DatagramSocket();
                 socket.setBroadcast(true);
-                 Log.d(TAG, "@@@  SendDiscovery 3 " + json);
+ //                Log.d(TAG, "@@@  SendDiscovery 3 " + json);
                  String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
                  for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
@@ -402,7 +402,7 @@ private void setName(String name)
                     }
                 //Log.d(TAG, "@@@  SendDiscovery 4");
                 Thread.sleep(30000);
-                Log.d(TAG, "@@@exc  before send instance to cpp");
+ //               Log.d(TAG, "@@@exc  before send instance to cpp");
                 sendDataToCpp(TeleLocService.this, 0,usersToString());
 
                 }
@@ -573,8 +573,8 @@ private void printIpAddresses(){
                     
                     // Filter for a valid local IPv4 address
                     if (address instanceof Inet4Address) {
-                        System.out.println("@@@### Interface: " + networkInterface.getDisplayName());
-                        System.out.println("@@@### Local IP Address: " + address.getHostAddress());
+                        //System.out.println("@@@### Interface: " + networkInterface.getDisplayName());
+                        //System.out.println("@@@### Local IP Address: " + address.getHostAddress());
                         //return; // Remove this return if you want to see all available local IPs
                     }
                 }
@@ -635,7 +635,7 @@ private String usersToString()
     }
     configObj.put("peers", peers);
     String s = configObj.toString();
-    Log.d(TAG, "@@@conf" + s);
+    //Log.d(TAG, "@@@conf" + s);
     return s;
     }
     catch (Exception e){
@@ -659,7 +659,7 @@ private String usersToString()
                     InetAddress addr = addresses.nextElement();
 
                     String sAddr = addr.getHostAddress();
-					Log.d(TAG, "@@@### " + sAddr);
+                                        //Log.d(TAG, "@@@### " + sAddr);
                                         //System.out.println("@@@### sAddr 1 =" + addr.getHostAddress() +" " + sAddr);
 
 					sAddr = sAddr.replace("::ffff:" , "");
@@ -734,7 +734,7 @@ private void startUdpReceiver() {
                     socket.receive(packet);
                     
                     String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8").trim();
-                    Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
+                    //Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
 
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
@@ -742,31 +742,31 @@ private void startUdpReceiver() {
                         String pName = obj.optString("name");
 						int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
-						Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
+//						Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
                         if ("discovery".equals(stype)) 
                         {
                             
-                            Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
+                            //Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
 							if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
-                                Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
+                                ///Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
                                 updatePeer(pName, pIp);
                             }
 						}
 						else
 						{
-                    Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
+                   // Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
 
 if ("incoming_call1".equals(stype))
-							{
-								String sNetType = obj.optString("name");
-								saveCall(pName, pIp, netType);
-								triggerFullScreenCall(message );
-							}
-						}
-					}
-                    catch (Exception e) {
-                        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА парсинга JSON: " + e.getMessage());
-                    }
+    {
+        String sNetType = obj.optString("name");
+        saveCall(pName, pIp, netType);
+        triggerFullScreenCall(message );
+    }
+}
+}
+     catch (Exception e) {
+        Log.e(TAG, "@@@ JAVA СЛУЖБА ОШИБКА парсинга JSON: " + e.getMessage());
+     }
                 }
                 socket.close();
             } 
@@ -782,26 +782,26 @@ Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
 }
 
 private void updatePeer(String name, String sip) {
-Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
+//Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
-    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
-    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
+//    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
+//    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
     String[] ip = new String[3];
     org.json.JSONArray ipArr = new org.json.JSONArray(sip);
     for (int i =0; i< 3; i++)
         ip[i] = ipArr.getString(i);
-    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
-    Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
-    Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
+//    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
+//    Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
+//    Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
     int us = users.size();
     if (us == 0)
         {
-        Log.e (TAG, "@@@updatePeer НЕТ ЮЗЕРОВ!");
+  //      Log.e (TAG, "@@@updatePeer НЕТ ЮЗЕРОВ!");
         return;
         }
     if (name.equals(users.get(0).name)){ //ПРишло дискавери от себя
-        Log.d(TAG, "@@@updatePeer 2 - from myself");
+ //       Log.d(TAG, "@@@updatePeer 2 - from myself");
         UserInfo user0 = users.get(0);
         for (int i =0; i< 3; i++)
             user0.ip[i] = ip[i];
@@ -817,7 +817,7 @@ try {
                     s+= "has 0ur duplicate ip=";
                     s+= ip[j];
                     s+= " - deleted 1";
-                    Log.w(TAG, s);
+ //                   Log.w(TAG, s);
                     //Log.w("@@@updatepeer Bad user "+
                     //    useri.name +"has 0ur duplicate ip=" +ip[j] +  " - deleted 1");
                     users.remove(user);
@@ -826,7 +826,7 @@ try {
         saveConfig();
         return;
     }
-    Log.d(TAG, "@@@updatePeer 3 from " +  name);
+  //  Log.d(TAG, "@@@updatePeer 3 from " +  name);
     boolean found = false;
     int iii = -1;
     for (UserInfo user : users)
@@ -834,31 +834,31 @@ try {
         String[] ips = user.ip;
         if (user.name.equals(name)){
             found = true;
-            Log.d(TAG, "@@@updatePeer 4 user[" + ++iii + "] ips=" +
-                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
+//            Log.d(TAG, "@@@updatePeer 4 user[" + ++iii + "] ips=" +
+//                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
             for (int j =0; j< 3; j++)
                 ips[j] = ip[j];
-            Log.d(TAG, "@@@updatePeer 4.1 user[" + iii + "] ips=" +
-                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
+//            Log.d(TAG, "@@@updatePeer 4.1 user[" + iii + "] ips=" +
+//                user.ip[0] +" " + user.ip[1] +" " + user.ip[2]);
             user.lastPing = System.currentTimeMillis();
-            Log.d(TAG, "@@@updatePeer 4.2 from " +  name + user.lastPing +  users.get(iii).lastPing);
+//            Log.d(TAG, "@@@updatePeer 4.2 from " +  name + user.lastPing +  users.get(iii).lastPing);
             int j = -1;
             if (false)
             for (UserInfo userj : users) {
                 j++ ;
                 if (userj != users.get(j))
-                    Log.w (TAG,"@@@updatePeer 4 СБой мндекса" + j);
+//                    Log.w (TAG,"@@@updatePeer 4 СБой мндекса" + j);
                 if (user==userj || users.get(0) == userj) continue;
                 String[] jips = userj.ip;
                 for (int k =0; k< 3; k++){
                     if (!"".equals(ip[k]) && jips[k].equals(ip[k]))
                     {
-                        Log.w(TAG, "@@@updatepeer Bad user "
-                        +userj.name +
-                        "has duplicate ip="
-                        +ip[k] +
-                        " - deleted 2");
-                        users.remove(userj);
+ //                       Log.w(TAG, "@@@updatepeer Bad user "
+//                        +userj.name +
+//                        "has duplicate ip="
+//                        +ip[k] +
+//                        " - deleted 2");
+//                        users.remove(userj);
                         j--;
                     }
                 }
