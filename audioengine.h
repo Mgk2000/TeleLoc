@@ -58,6 +58,10 @@ private:
     QTimer audioTimer;
     void startAudioTimer();
     int inAudioSize = 0, outAuioSize = 0;
+    void setAndroidVoipMode(bool enable);
+    bool m_isTalking = false;
+    bool firstReceive = true;
+    bool firstSend = true;
 private slots:
 };
 

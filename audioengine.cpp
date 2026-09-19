@@ -4,100 +4,184 @@
 
 #include <QDir>
 #include <QStandardPaths>
+
+#ifdef Q_OS_ANDROID
+#include <QJniObject>
+#include <QJniEnvironment>
+#endif
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
+    , m_audioOutputDevice(nullptr)
     , m_udpAudioReceiver(nullptr)
     , m_udpAudioSender(nullptr)
     , m_audioSource(nullptr)
     , m_audioSink(nullptr)
     , m_audioInputDevice(nullptr)
-    , m_audioOutputDevice(nullptr),
-    netEngine ((NetworkEngine *) parent )
+    , m_unixSizeSenderIn(0)
+    , m_unixSizeSenderNet(0)
+    , m_unixSizeReceiverNet(0)
+    , m_unixSizeReceiverOut(0)
+    , m_unixCurrentRole("none")
+    , m_unixIsMuted(false)
+    , m_isTalking(false)
 {
-    m_udpAudioReceiver = new QUdpSocket(this);
+    // Инициализируем аудиоформат локально
+    QAudioFormat format;
+    format.setSampleRate(16000);
+    format.setChannelCount(1);
+    format.setSampleFormat(QAudioFormat::Int16);
+
+    // Создаем аудиовыход (динамик) один раз при старте
+    m_audioSink = new QAudioSink(QMediaDevices::defaultAudioOutput(), format, this);
+
     m_udpAudioSender = new QUdpSocket(this);
+    m_udpAudioReceiver = new QUdpSocket(this);
 
-    if (!m_udpAudioReceiver->bind(QHostAddress::AnyIPv4, 28002, QUdpSocket::ShareAddress)) {
-        qWarning() << "Failed to bind UDP audio port";
-    }
+    // Биндим порт
+    m_udpAudioReceiver->bind(QHostAddress::AnyIPv4, 28002);
 
+    // ВОЗВРАЩАЕМ ВАШ НАТИВНЫЙ CONNECT К ФУНКЦИИ ЧТЕНИЯ UDP
     connect(m_udpAudioReceiver, &QUdpSocket::readyRead, this, &AudioEngine::onReadyReadUdp);
+}
+
+void AudioEngine::startRecording(const QString &targetIp)
+{
+    m_targetIp = targetIp;
+
+
+    if (m_audioSource) {
+        m_audioSource->stop();
+        m_audioSource->deleteLater();
+        m_audioSource = nullptr;
+    }
+    m_audioInputDevice = nullptr;
+
+    if (m_audioSink) {
+        m_audioSink->stop();
+        m_audioOutputDevice = nullptr;
+    }
 
     QAudioFormat format;
     format.setSampleRate(16000);
     format.setChannelCount(1);
     format.setSampleFormat(QAudioFormat::Int16);
 
-    m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
-    m_audioSink = new QAudioSink(QMediaDevices::defaultAudioOutput(), format, this);
-
-    m_audioOutputDevice = m_audioSink->start();
-    m_unixSizeSenderIn = 0;
-    m_unixSizeSenderNet = 0;
-    m_unixSizeReceiverNet = 0;
-    m_unixSizeReceiverOut = 0;
-    m_unixCurrentRole = "none";
-    m_unixIsMuted = false;
-   // startAudioTimer();
-}
-void AudioEngine::startRecording(const QString &targetIp)
-{
-    m_targetIp = targetIp;
-
-    if (m_audioInputDevice) {
-        m_audioSource->stop();
+    if (m_audioSink) {
+        m_audioSink->setVolume(0.125f);
+        m_audioOutputDevice = m_audioSink->start();
     }
 
+    m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
     m_audioInputDevice = m_audioSource->start();
+    if (!m_audioInputDevice) return;
 
-    if (m_audioInputDevice) {
-        connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
-            QByteArray data = m_audioInputDevice->readAll();
-            if (data.isEmpty()) return;
+    m_ringBuffer.clear();
 
-            // --- ЭТАП 1: Чистый звук из микрофона (SenderIn) ---
-            if (m_unixCurrentRole == "sender" && m_unixFileSenderIn.isOpen()) {
-                m_unixFileSenderIn.write(data);
-                m_unixSizeSenderIn += data.size();
-            }
+    connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
+        if (!m_audioInputDevice || !m_audioSource) return;
 
-            int len = data.size();
+        QByteArray data = m_audioInputDevice->readAll();
+        if (data.isEmpty()) return;
+
+        if (firstSend)
+            {
+            startWriteToFile("sender");
+            firstSend = false;
+        }
+
+        m_ringBuffer.append(data);
+
+        if (m_ringBuffer.size() > 3840) {
+            m_ringBuffer.clear();
+        }
+
+        while (m_ringBuffer.size() >= 640) {
+            QByteArray chunk = m_ringBuffer.left(640);
+            m_ringBuffer.remove(0, 640);
+
+            int len = chunk.size();
             int currentVolume = 0;
-            short *ptr = reinterpret_cast<short*>(data.data());
+            short *ptr = reinterpret_cast<short*>(chunk.data());
 
             for (int i = 0; i < len / 2; ++i) {
                 int sample = ptr[i];
                 if (sample < 0) sample = -sample;
                 if (sample > currentVolume) currentVolume = sample;
-
-                int reduced = static_cast<int>(ptr[i] / 2.5);
-                if (reduced > 32767) reduced = 32767;
-                if (reduced < -32768) reduced = -32768;
-                ptr[i] = static_cast<short>(reduced);
             }
 
             currentVolume = (currentVolume * 100) / 32767;
             emit micVolumeUpdated(currentVolume);
 
-            // --- ЭТАП 2: Модифицированный звук перед отправкой в сеть (SenderNet) ---
             if (m_unixCurrentRole == "sender" && m_unixFileSenderNet.isOpen()) {
-                m_unixFileSenderNet.write(data);
-                m_unixSizeSenderNet += data.size();
+                m_unixFileSenderNet.write(chunk);
+                m_unixSizeSenderNet += chunk.size();
             }
 
-            if (!m_unixIsMuted) {
-                m_udpAudioSender->writeDatagram(data, QHostAddress(m_targetIp), 28002);
+            if (!m_unixIsMuted && m_udpAudioSender) {
+                m_udpAudioSender->writeDatagram(chunk, QHostAddress(m_targetIp), 28002);
             }
-        });
-    }
+        }
+    });
 }
+
 void AudioEngine::stop()
 {
+    // 1. Отключаем обработку сигналов микрофона
+#ifndef Q_OS_ANDROID
+    stopWriteToFile();
+#endif
+    if (m_audioInputDevice) {
+        m_audioInputDevice->disconnect(this);
+        m_audioInputDevice = nullptr;
+    }
+
+    // 2. Безопасно уничтожаем устройство записи звука через deleteLater()
     if (m_audioSource) {
         m_audioSource->stop();
+        m_audioSource->deleteLater();
+        m_audioSource = nullptr;
     }
-    m_audioInputDevice = nullptr;
-    m_ringBuffer.clear();
+
+    if (m_audioSink) {
+        m_audioSink->stop();
+    }
+    m_audioOutputDevice = nullptr;
+
+    if (m_unixFileSenderIn.isOpen()) m_unixFileSenderIn.close();
+    if (m_unixFileSenderNet.isOpen()) m_unixFileSenderNet.close();
+    if (m_unixFileReceiverNet.isOpen()) m_unixFileReceiverNet.close();
+    if (m_unixFileReceiverOut.isOpen()) m_unixFileReceiverOut.close();
+
+    // 3. Возвращаем Android в стандартный режим звука
+    setAndroidVoipMode(false);
+}
+
+void AudioEngine::setAndroidVoipMode(bool enable) {
+#ifdef Q_OS_ANDROID
+    QJniEnvironment env;
+    if (!env.isValid()) return;
+
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity", "android/app/Activity");
+    if (!activity.isValid()) return;
+
+    QJniObject context = activity.callObjectMethod("getApplicationContext", "()android/content/Context;");
+    if (!context.isValid()) return;
+
+    QJniObject audioServiceString = QJniObject::getStaticObjectField(
+        "android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
+    if (!audioServiceString.isValid()) return;
+
+    QJniObject audioManager = context.callObjectMethod(
+        "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
+    if (!audioManager.isValid()) return;
+
+    // 3 = MODE_IN_COMMUNICATION, 0 = MODE_NORMAL
+    int mode = enable ? 3 : 0;
+    audioManager.callMethod<void>("setMode", "(I)V", mode);
+#else
+    Q_UNUSED(enable);
+#endif
 }
 void AudioEngine::onReadyReadUdp()
 {
@@ -105,20 +189,26 @@ void AudioEngine::onReadyReadUdp()
         QByteArray datagram;
         datagram.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
         int dataSize = datagram.size();
-        m_udpAudioReceiver->readDatagram(datagram.data(), dataSize );
+        m_udpAudioReceiver->readDatagram(datagram.data(), dataSize);
         inAudioSize += dataSize;
+        qDebug() << "@@@ sound in " << dataSize;
         m_ringBuffer.append(datagram);
 
-        if (m_ringBuffer.size() > 19200) {
-            m_ringBuffer.remove(0, m_ringBuffer.size() - 3200);
+        if (m_ringBuffer.size() > 3840) {
+            m_ringBuffer.clear();
         }
 
-        while (m_ringBuffer.size() >= 3200) {
-            QByteArray chunk = m_ringBuffer.left(3200);
-            m_ringBuffer.remove(0, 3200);
+        while (m_ringBuffer.size() >= 640) {
+            QByteArray chunk = m_ringBuffer.left(640);
+            m_ringBuffer.remove(0, 640);
 
-            // --- ЭТАП 3: Звук в том виде, в каком он пришёл из сети (ReceiverNet) ---
-            if (m_unixCurrentRole == "receiver" && m_unixFileReceiverNet.isOpen()) {
+            if (chunk.isEmpty()) continue;
+            if (firstReceive)
+            {
+                firstReceive = false;
+                startWriteToFile("receiver");
+            }
+            if (/*m_unixCurrentRole == "receiver" &&*/ m_unixFileReceiverNet.isOpen()) {
                 m_unixFileReceiverNet.write(chunk);
                 m_unixSizeReceiverNet += chunk.size();
             }
@@ -133,11 +223,8 @@ void AudioEngine::onReadyReadUdp()
                 if (sample > currentVolume) currentVolume = sample;
             }
             currentVolume = (currentVolume * 100) / 32767;
-            if (currentVolume > 0)
-                qDebug() << "@@@ggg vol=" << currentVolume;
-            emit netVolumeUpdated   (currentVolume);
+            emit netVolumeUpdated(currentVolume);
 
-            // --- ЭТАП 4: Звук после всех обработок перед отправкой в динамик (ReceiverOut) ---
             if (m_unixCurrentRole == "receiver" && m_unixFileReceiverOut.isOpen()) {
                 m_unixFileReceiverOut.write(chunk);
                 m_unixSizeReceiverOut += chunk.size();
@@ -323,3 +410,4 @@ void AudioEngine::onTimer()
     inAudioSize = 0;
     outAuioSize = 0;
 }
+

@@ -532,7 +532,7 @@ void NetworkEngine::saveName(const QString &name) {
 
 QString NetworkEngine::getSavedName() {
     qDebug() << "@@@getSavedName() 1 ";
-    debugUsers();
+//    debugUsers();
     if (!m_users.isEmpty()) {
         qDebug() << "@@@getSavedName() 2 ";
         return m_users[0].name;
