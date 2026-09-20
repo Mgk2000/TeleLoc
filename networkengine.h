@@ -162,7 +162,7 @@ public:
         for (int i =0; i< users.count(); i++)
             qDebug() << "@@@setUsers " << i << users[i].name;
         beginResetModel();
-        m_users = users;
+        m_users = users.mid(1);
         endResetModel();
     }
 

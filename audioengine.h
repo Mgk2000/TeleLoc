@@ -22,7 +22,8 @@ public:
     Q_INVOKABLE void stopWriteToFile();
     Q_INVOKABLE void muteMicrophone(bool mute);
     QIODevice *m_audioOutputDevice;
-    QByteArray m_ringBuffer;
+    QByteArray m_ringBuffer, m_micBuffer;
+    void setWriteToFile(bool w) {writeToFile = w;}
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
@@ -62,6 +63,7 @@ private:
     bool m_isTalking = false;
     bool firstReceive = true;
     bool firstSend = true;
+    bool writeToFile = false;
 private slots:
 };
 

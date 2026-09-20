@@ -965,7 +965,7 @@ void NetworkEngine::masterStartRecording()
     qDebug() << "@@@- [NetworkEngine] Мастер нажал запись. Включаем локальный Sender и шлем команду по TCP...";
 
     // 1. Включаем запись у себя (мы — отправитель)
-    audioEngine->startWriteToFile("sender");
+    audioEngine->setWriteToFile(true);
     // 2. Отправляем команду по TCP удалённой стороне на порт 28000
     sendTCP("start_audio_recording");
 }
@@ -975,7 +975,7 @@ void NetworkEngine::masterStopRecording()
     qDebug() << "@@@- [NetworkEngine] Мастер остановил запись. Сохраняем Sender и шлем стоп по TCP...";
 
     // 1. Выключаем запись у себя
-    audioEngine->stopWriteToFile();
+    audioEngine->setWriteToFile(false);
 
     // 2. Отправляем стоп-команду по TCP
         sendTCP("stop_audio_recording");

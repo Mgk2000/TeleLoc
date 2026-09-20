@@ -48,7 +48,6 @@ void AudioEngine::startRecording(const QString &targetIp)
 {
     m_targetIp = targetIp;
 
-
     if (m_audioSource) {
         m_audioSource->stop();
         m_audioSource->deleteLater();
@@ -76,6 +75,7 @@ void AudioEngine::startRecording(const QString &targetIp)
     if (!m_audioInputDevice) return;
 
     m_ringBuffer.clear();
+    m_micBuffer.clear();
 
     connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
         if (!m_audioInputDevice || !m_audioSource) return;
@@ -83,21 +83,24 @@ void AudioEngine::startRecording(const QString &targetIp)
         QByteArray data = m_audioInputDevice->readAll();
         if (data.isEmpty()) return;
 
-        if (firstSend)
-            {
+        if (writeToFile && firstSend) {
             startWriteToFile("sender");
             firstSend = false;
         }
-
-        m_ringBuffer.append(data);
-
-        if (m_ringBuffer.size() > 3840) {
-            m_ringBuffer.clear();
+        if (writeToFile &&  m_unixFileSenderIn.isOpen()) {
+            m_unixFileSenderIn.write(data);
+            m_unixSizeSenderIn += data.size();
         }
 
-        while (m_ringBuffer.size() >= 640) {
-            QByteArray chunk = m_ringBuffer.left(640);
-            m_ringBuffer.remove(0, 640);
+        m_micBuffer.append(data);
+
+        if (m_micBuffer.size() > 3840) {
+            m_micBuffer.clear();
+        }
+
+        while (m_micBuffer.size() >= 640) {
+            QByteArray chunk = m_micBuffer.left(640);
+            m_micBuffer.remove(0, 640);
 
             int len = chunk.size();
             int currentVolume = 0;
@@ -112,7 +115,7 @@ void AudioEngine::startRecording(const QString &targetIp)
             currentVolume = (currentVolume * 100) / 32767;
             emit micVolumeUpdated(currentVolume);
 
-            if (m_unixCurrentRole == "sender" && m_unixFileSenderNet.isOpen()) {
+            if (writeToFile &&  m_unixFileSenderNet.isOpen()) {
                 m_unixFileSenderNet.write(chunk);
                 m_unixSizeSenderNet += chunk.size();
             }
@@ -127,15 +130,12 @@ void AudioEngine::startRecording(const QString &targetIp)
 void AudioEngine::stop()
 {
     // 1. Отключаем обработку сигналов микрофона
-#ifndef Q_OS_ANDROID
     stopWriteToFile();
-#endif
     if (m_audioInputDevice) {
         m_audioInputDevice->disconnect(this);
         m_audioInputDevice = nullptr;
     }
 
-    // 2. Безопасно уничтожаем устройство записи звука через deleteLater()
     if (m_audioSource) {
         m_audioSource->stop();
         m_audioSource->deleteLater();
@@ -147,13 +147,17 @@ void AudioEngine::stop()
     }
     m_audioOutputDevice = nullptr;
 
+    m_ringBuffer.clear();
+    m_micBuffer.clear();
+
     if (m_unixFileSenderIn.isOpen()) m_unixFileSenderIn.close();
     if (m_unixFileSenderNet.isOpen()) m_unixFileSenderNet.close();
     if (m_unixFileReceiverNet.isOpen()) m_unixFileReceiverNet.close();
     if (m_unixFileReceiverOut.isOpen()) m_unixFileReceiverOut.close();
 
-    // 3. Возвращаем Android в стандартный режим звука
     setAndroidVoipMode(false);
+    firstReceive = true;
+    firstSend = true;
 }
 
 void AudioEngine::setAndroidVoipMode(bool enable) {
@@ -203,12 +207,12 @@ void AudioEngine::onReadyReadUdp()
             m_ringBuffer.remove(0, 640);
 
             if (chunk.isEmpty()) continue;
-            if (firstReceive)
+            if (firstReceive && writeToFile)
             {
                 firstReceive = false;
                 startWriteToFile("receiver");
             }
-            if (/*m_unixCurrentRole == "receiver" &&*/ m_unixFileReceiverNet.isOpen()) {
+            if (writeToFile && m_unixFileReceiverNet.isOpen()) {
                 m_unixFileReceiverNet.write(chunk);
                 m_unixSizeReceiverNet += chunk.size();
             }
@@ -225,7 +229,7 @@ void AudioEngine::onReadyReadUdp()
             currentVolume = (currentVolume * 100) / 32767;
             emit netVolumeUpdated(currentVolume);
 
-            if (m_unixCurrentRole == "receiver" && m_unixFileReceiverOut.isOpen()) {
+            if (writeToFile && m_unixFileReceiverOut.isOpen()) {
                 m_unixFileReceiverOut.write(chunk);
                 m_unixSizeReceiverOut += chunk.size();
             }
@@ -363,15 +367,13 @@ void AudioEngine::startWriteToFile(const QString &role)
 
 void AudioEngine::stopWriteToFile()
 {
-    if (m_unixCurrentRole == "sender") {
         if (m_unixFileSenderIn.isOpen()) { writeWavHeader(m_unixFileSenderIn, m_unixSizeSenderIn); m_unixFileSenderIn.close(); }
         if (m_unixFileSenderNet.isOpen()) { writeWavHeader(m_unixFileSenderNet, m_unixSizeSenderNet); m_unixFileSenderNet.close(); }
-    }
-    else if (m_unixCurrentRole == "receiver") {
         if (m_unixFileReceiverNet.isOpen()) { writeWavHeader(m_unixFileReceiverNet, m_unixSizeReceiverNet); m_unixFileReceiverNet.close(); }
         if (m_unixFileReceiverOut.isOpen()) { writeWavHeader(m_unixFileReceiverOut, m_unixSizeReceiverOut); m_unixFileReceiverOut.close(); }
-    }
     m_unixCurrentRole = "none";
+        firstReceive = true;
+    firstSend = true;
     qDebug() << "@@@ [AudioEngine] Все активные аудиофайлы успешно сохранены.";
 }
 
