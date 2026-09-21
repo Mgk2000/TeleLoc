@@ -66,7 +66,7 @@ void AudioEngine::startRecording(const QString &targetIp)
     format.setSampleFormat(QAudioFormat::Int16);
 
     if (m_audioSink) {
-        m_audioSink->setVolume(0.125f);
+        m_audioSink->setVolume(0.25);
         m_audioOutputDevice = m_audioSink->start();
     }
 

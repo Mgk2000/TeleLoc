@@ -393,7 +393,7 @@ private void setName(String name)
                 byte[] bytes = json.getBytes("UTF-8");
                 java.net.DatagramSocket socket = new java.net.DatagramSocket();
                 socket.setBroadcast(true);
- //                Log.d(TAG, "@@@  SendDiscovery 3 " + json);
+                 Log.d(TAG, "@@@  SendDiscovery 3 " + json);
                  String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
                  for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
@@ -401,7 +401,7 @@ private void setName(String name)
                         socket.send(packet);
                     }
                 //Log.d(TAG, "@@@  SendDiscovery 4");
-                Thread.sleep(30000);
+                Thread.sleep(3000);
  //               Log.d(TAG, "@@@exc  before send instance to cpp");
                 sendDataToCpp(TeleLocService.this, 0,usersToString());
 
@@ -782,16 +782,16 @@ Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
 }
 
 private void updatePeer(String name, String sip) {
-//Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
+Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
-//    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
-//    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
+    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
+    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
     String[] ip = new String[3];
     org.json.JSONArray ipArr = new org.json.JSONArray(sip);
     for (int i =0; i< 3; i++)
         ip[i] = ipArr.getString(i);
-//    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
+    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
 //    Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
 //    Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
     int us = users.size();

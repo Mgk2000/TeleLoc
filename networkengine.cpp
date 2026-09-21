@@ -88,6 +88,9 @@ NetworkEngine::NetworkEngine(QObject *parent)
 
 
 #endif
+    QTimer *updateUsersTimer = new QTimer(this);
+    connect(updateUsersTimer, &QTimer::timeout, this, &NetworkEngine::updateUsersList);
+    updateUsersTimer->start(10000);
 
 }
 
@@ -290,12 +293,20 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 3 для:" << name;
 
     tcpSocket->abort();
+   // bool connected = false;
 #ifdef Q_OS_ANDROID
     tcpSocket->connectToHost(targetIp, 28500);
+/*    connect (tcpSocket,&QTcpSocket::connected, this, [this, data, connected](){
+        tcpSocket->write(data);
+        tcpSocket->waitForBytesWritten(1000);
+        tcpSocket->disconnectFromHost();
+
+
+    });*/
 #endif
 
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 4 для:" << name;
-
+    //if (!connected)
     if (tcpSocket->waitForConnected(3000)) {
         tcpSocket->write(data);
         tcpSocket->waitForBytesWritten(1000);
@@ -305,10 +316,14 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
         qDebug() << "@@@ СЕТЬ C++ ОШИБКА: Порт 28500 не ответил. Пробую резервный порт C++:" << PORT;
         tcpSocket->abort();
         tcpSocket->connectToHost(targetIp, PORT);
-        if (tcpSocket->waitForConnected(2000)) {
+        if (tcpSocket->waitForConnected(3000)) {
             tcpSocket->write(data);
             tcpSocket->disconnectFromHost();
-    }   qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 5 для:" << name;
+        }
+        else {
+            //tcpSocket->abort();
+            return;
+        }
     }
     m_ringbackTone->play();
 }
@@ -422,6 +437,8 @@ void NetworkEngine::readConfig() {
     qDebug() << "@@@ read config 3";
     QJsonArray peersArray = rootObj["peers"].toArray();
     if (!peersArray.isEmpty())
+    {
+        m_users.clear();
     for (int i = 0; i < peersArray.size(); ++i) {
         QJsonObject peerObj = peersArray.at(i).toObject();
         qDebug() << "@@@ read config 3.2";
@@ -436,6 +453,7 @@ void NetworkEngine::readConfig() {
         m_users.append(u);
         qDebug() << "@@@ read config 3.6";
         }
+    }
     qDebug() << "@@@ read config 4" ;
     if (rootObj.contains("lastCall"))
         {
@@ -948,6 +966,13 @@ void NetworkEngine::setNetType(int _netType)
 {
     callInfo.netType = _netType;
     emit setActiveNetType(_netType);
+}
+
+void NetworkEngine::updateUsersList()
+{
+    readConfig();
+    //usersModel->updateAllUsers(m_users);
+    usersModel->setUsers(m_users);
 }
 
 void NetworkEngine::deleteLastCall()

@@ -136,7 +136,7 @@ private:
     }
     void sendCallByTcp(const QString &name, int netType);
     void setNetType(int _netType);
-
+    void updateUsersList();
     void deleteLastCall();
 };
 
@@ -162,7 +162,7 @@ public:
         for (int i =0; i< users.count(); i++)
             qDebug() << "@@@setUsers " << i << users[i].name;
         beginResetModel();
-        m_users = users.mid(1);
+        m_users = users.mid(1, 1000);
         endResetModel();
     }
 
@@ -185,6 +185,17 @@ public:
         case IsAliveRole:  return user.isAlive();
         default:           return QVariant();
         }
+    }
+    void updateAllUsers(const QList<UserInfo>& newUsers) {
+        // 1. Сообщаем QML, что модель начинает полную перезагрузку
+        beginResetModel();
+
+        // 2. Меняем данные внутри вашей модели
+        m_users = newUsers;
+
+        // 3. Сообщаем QML, что обновление завершено.
+        // В этот же миг ListView в QML полностью и мгновенно перерисуется!
+        endResetModel();
     }
 
 protected:

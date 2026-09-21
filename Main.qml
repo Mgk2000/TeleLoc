@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Controls 2.15 // Убедитесь, что этот импорт есть в начале файла
 ApplicationWindow {
     id: window
     visible: true
@@ -17,7 +18,7 @@ ApplicationWindow {
     property string savedName: "Полосарь"
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
-    property bool develop : true
+    property bool developer : false
     property int micVolume: 0
     ListModel {
         id: chatLogModel
@@ -90,11 +91,18 @@ ApplicationWindow {
             window.activeCallNetType = _netType
          }
     }
+    function toolbarHeight()
+    {
+        if (developer)
+            return 150
+        else
+            return 50
+    }
 
     Rectangle {
         id: toolbar
         width: parent.width
-        height: 160
+        height: toolbarHeight()
         color: "#2c3e50"
         anchors.top: parent.top
 
@@ -104,7 +112,6 @@ ApplicationWindow {
             spacing: 5
 
             Row {
-                visible: develop
                 width: parent.width
                 height: 50
                 spacing: 8
@@ -129,64 +136,10 @@ ApplicationWindow {
                         settingsDialog.open()
                     }
                 }
-
-                Button {
-                    id: debugToneButton
-                    width: 50
-                    height: 50
-                    background: Rectangle {
-                        color: "#f1c40f"
-                        radius: 8
-                    }
-                    contentItem: Text {
-                        text: "🎵"
-                        font.pixelSize: 20
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: netEngine.debugUsers()
-                }
-
-                Rectangle {
-                    id: micVolumeIndicator
-                    width: (parent.width - 174) / 2
-                    height: 50
-                    color: "#34495e"
-                    radius: 8
-                    border.color: "#bdc3c7"
-                    border.width: 1
-
-                    Text {
-                        id: micIndicatorText
-                        text: "🎤 0%"
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                        anchors.centerIn: parent
-                    }
-                }
-
-                Rectangle {
-                    id: netVolumeIndicator
-                    width: (parent.width - 174) / 2
-                    height: 50
-                    color: "#34495e"
-                    radius: 8
-                    border.color: "#bdc3c7"
-                    border.width: 1
-
-                    Text {
-                        id: netIndicatorText
-                        text: "🔊 0%"
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                        anchors.centerIn: parent
-                    }
-                }
             }
 
             Row {
+                visible: developer
                 width: parent.width
                 height: 50
                 spacing: 8
@@ -418,8 +371,7 @@ ApplicationWindow {
                 width: parent.width
                 height: 50
                 spacing: 8
-//                import QtQuick
-//                import QtQuick.Controls
+                visible: developer
 
                 // Кнопка записи (Красный треугольник / Красный квадрат)
                 Button {
@@ -506,6 +458,61 @@ ApplicationWindow {
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
+                Button {
+                    id: debugToneButton
+                    width: 50
+                    height: 50
+                    background: Rectangle {
+                        color: "#f1c40f"
+                        radius: 8
+                    }
+                    contentItem: Text {
+                        text: "🎵"
+                        font.pixelSize: 20
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: netEngine.debugUsers()
+                }
+
+                Rectangle {
+                    id: micVolumeIndicator
+                    width: (parent.width - 174) / 2
+                    height: 50
+                    color: "#34495e"
+                    radius: 8
+                    border.color: "#bdc3c7"
+                    border.width: 1
+
+                    Text {
+                        id: micIndicatorText
+                        text: "🎤 0%"
+                        color: "white"
+                        font.pixelSize: 11
+                        font.bold: true
+                        anchors.centerIn: parent
+                    }
+                }
+
+                Rectangle {
+                    id: netVolumeIndicator
+                    width: (parent.width - 174) / 2
+                    height: 50
+                    color: "#34495e"
+                    radius: 8
+                    border.color: "#bdc3c7"
+                    border.width: 1
+
+                    Text {
+                        id: netIndicatorText
+                        text: "🔊 0%"
+                        color: "white"
+                        font.pixelSize: 11
+                        font.bold: true
+                        anchors.centerIn: parent
+                    }
+                }
+
             }
         }
     }
@@ -568,13 +575,13 @@ ApplicationWindow {
         id: usersList
         model: myUsersModel // Наша C++ модель
         spacing: 8
-        anchors.top: toolbar.bottom // Привязываем верх к низу тулбара
+        anchors.top: toolbar.bottom// //toolbarHeight() // Привязываем верх к низу тулбара
         anchors.bottom: parent.bottom // Привязываем низ к низу окна
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: 10 // Оступы со всех сторон, если нужны
         delegate: Rectangle {
-            width: parent.width
+            width: usersList.width
             height: 60
             color: "#f5f5f5"
             radius: 6
@@ -863,7 +870,8 @@ ApplicationWindow {
         title: "Настройки"
         anchors.centerIn: parent
         width: 280
-        height: 180
+        // Увеличили высоту со 180 до 230, чтобы поместился переключатель
+        height: 230
         modal: true
 
         contentItem: Column {
@@ -877,6 +885,21 @@ ApplicationWindow {
                 height: 40
                 placeholderText: "Ваше имя"
                 text: savedName
+            }
+
+            // Новый переключатель "Для разработчиков"
+            Switch {
+                id: developerSwitch
+                text: "Для разработчиков"
+                width: parent.width
+
+                // Связываем состояние переключателя с текущим значением свойства в главном окне
+                checked: developer
+
+                // При клике пользователем меняем свойство в главном окне
+                onCheckedChanged: {
+                    developer = checked
+                }
             }
 
             Button {
