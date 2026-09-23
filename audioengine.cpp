@@ -47,6 +47,7 @@ AudioEngine::AudioEngine(QObject *parent)
 void AudioEngine::startRecording(const QString &targetIp)
 {
     m_targetIp = targetIp;
+    setAndroidVoipMode(true);
 
     if (m_audioSource) {
         m_audioSource->stop();

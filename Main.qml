@@ -20,6 +20,8 @@ ApplicationWindow {
     property int activeCallNetType: -1
     property bool developer : false
     property int micVolume: 0
+    property string callingColor: "#008800"
+     property bool chatVisible: false
     ListModel {
         id: chatLogModel
     }
@@ -90,6 +92,15 @@ ApplicationWindow {
          function onSetActiveNetType(_netType) {
             window.activeCallNetType = _netType
          }
+         function onSetCallState(st) {
+             if (st===0)
+                 callingColor = "#008800"
+             else if (st===1 || st ===2)
+                 callingColor = "#88ff88"
+            else
+                callingColor="#ffcccc"
+            console.log("@@@state (QML) CallState=" , st, callingColor)
+         }
     }
     function toolbarHeight()
     {
@@ -111,8 +122,12 @@ ApplicationWindow {
             anchors.margins: 5
             spacing: 5
 
-            Row {
-                width: parent.width
+            RowLayout {
+                //width: parent.width
+                // Заставляем макет растянуться на всю ширину родителя
+                anchors.left: parent.left
+                anchors.right: parent.right
+                id: row0
                 height: 50
                 spacing: 8
 
@@ -122,7 +137,7 @@ ApplicationWindow {
                     width: 50
                     height: 50
                     background: Rectangle {
-                        color: "#7f8c8d"
+                        color: "#ffffff"
                         radius: 8
                     }
                     contentItem: Text {
@@ -130,11 +145,33 @@ ApplicationWindow {
                         font.pixelSize: 20
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
+                        color: "#0000ff"
                     }
                     onClicked: {
                         savedName = netEngine.getSavedName()
                         settingsDialog.open()
                     }
+                }
+                Item {
+                            Layout.fillWidth: true}
+                Button{
+                    id: chatButton
+                    width: 50
+                    height: 50
+                    leftPadding: row0.width - x - width
+
+                    visible: chatVisible
+                    contentItem: Text{
+                        text: "✖️"
+                        font.pixelSize: 30
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+
+                    }
+                    onClicked: {
+                        chatVisible = false
+                        chatButton.visible = false
+                }
                 }
             }
 
@@ -517,7 +554,7 @@ ApplicationWindow {
         }
     }
     ListView {
-        visible: false
+        visible: chatVisible
         id: chatListView
         width: parent.width
         anchors.top: toolbar.bottom
@@ -573,6 +610,7 @@ ApplicationWindow {
     }
     ListView {
         id: usersList
+        visible: !chatVisible
         model: myUsersModel // Наша C++ модель
         spacing: 8
         anchors.top: toolbar.bottom// //toolbarHeight() // Привязываем верх к низу тулбара
@@ -751,9 +789,7 @@ ApplicationWindow {
                         verticalAlignment: Text.AlignVCenter
                     }
                     onClicked: {
-                        chatListView.visible = true
-                        usersList.visible = false
-                        messageInputRow.visible = true
+                        chatVisible = true
                         console.log("Чат с", userName )
 
                     }
@@ -764,7 +800,7 @@ ApplicationWindow {
 
     Row {
         id: messageInputRow
-        visible: false
+        visible: chatVisible
         width: parent.width
         height: 50
         spacing: 5

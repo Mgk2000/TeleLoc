@@ -158,18 +158,31 @@ public void executeCommandFromCpp(int commandId, String param) {
                     String message = new String(buffer,0 ,  bytesRead, "UTF-8");
                     Log.d(TAG, "@@@ Tcp received " + message);
                         org.json.JSONObject obj = new org.json.JSONObject(message);
-						String stype = obj.optString("type");
+                        String stype = obj.optString("type");
                         String pName = obj.optString("name");
                         int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
 						//Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
-                    //Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
+                   // Log.d(TAG, "@@@ JAVA СЛУЖБА: Получен UDP пакет: " + message + " stype= " + stype);
                         if ("incoming_call".equals(stype))
                         {
                             String sNetType = obj.optString("netType");
                             saveCall(pName, pIp, netType);
-                            Log.d(TAG, "Before triggerFullScreenCall " + pIp + " " + pName);
+                            Log.d(TAG, "@@@incomingCall Before triggerFullScreenCall ip=" + pIp + "name=" + pName);
                             triggerFullScreenCall(message );
+                            try{
+                                sendDataToCpp(TeleLocService.this, 1,message);
+                            } catch(UnsatisfiedLinkError e)
+                            {
+                            Log.d(TAG, "@@@incomingCall error from JAva - process not running");
+
+                            }
+
+
+                            catch (Exception e)
+                            {
+                                Log.d(TAG, "@@@incomingCall error from JAva");
+                            }
                         }
                         else
                         {
@@ -393,7 +406,7 @@ private void setName(String name)
                 byte[] bytes = json.getBytes("UTF-8");
                 java.net.DatagramSocket socket = new java.net.DatagramSocket();
                 socket.setBroadcast(true);
-                 Log.d(TAG, "@@@  SendDiscovery 3 " + json);
+                 //Log.d(TAG, "@@@  SendDiscovery 3 " + json);
                  String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
                  for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
@@ -734,7 +747,7 @@ private void startUdpReceiver() {
                     socket.receive(packet);
                     
                     String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8").trim();
-                    //Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
+                    Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
 
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
@@ -782,16 +795,16 @@ Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
 }
 
 private void updatePeer(String name, String sip) {
-Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
+//Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
     Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
-    Log.d(TAG, "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
+   // Log.d(TAG,  "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
     String[] ip = new String[3];
     org.json.JSONArray ipArr = new org.json.JSONArray(sip);
     for (int i =0; i< 3; i++)
         ip[i] = ipArr.getString(i);
-    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
+//    Log.d(TAG, "@@@updatePeer ip[0]=" + ip[0]);
 //    Log.d(TAG, "@@@updatePeer ip[1]=" + ip[1]);
 //    Log.d(TAG, "@@@updatePeer ip[2]=" + ip[2]);
     int us = users.size();
@@ -889,7 +902,7 @@ catch (Exception e){
 private boolean isProcessRunning() {
     try {
     sendDataToCpp(TeleLocService.this, 100,"");
-    Log.d(TAG, "@@@isProcessRunning Process Running");
+    //Log.d(TAG, "@@@isProcessRunning Process Running");
     return true;
     }
     catch (UnsatisfiedLinkError e) {

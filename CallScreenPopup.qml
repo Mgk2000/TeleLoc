@@ -35,7 +35,7 @@ Popup {
             width: 120
             height: 120
             radius: 60
-            color: "#1e4d34"
+            color: callingColor
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
             anchors.topMargin: parent.height * 0.15

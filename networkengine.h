@@ -58,6 +58,11 @@ public:
     void unpressCallButtons();
     void pressCallButon(int _netType);
     Q_INVOKABLE bool activeNetType();
+    Q_INVOKABLE bool isCallIdle () const {return callInfo.state == CallInfo::idle;}
+    Q_INVOKABLE bool isCallCalling () const
+        {return callInfo.state == CallInfo::inCalling ||
+                 callInfo.state == CallInfo::outCalling;}
+    Q_INVOKABLE bool isCallSpeaking () const {return callInfo.state == CallInfo::speaking;}
     CallInfo callInfo;
     AudioEngine *audioEngine;
     UsersModel* usersModel;
@@ -70,6 +75,7 @@ public:
     void configFromString(const QString & sconf);
     void setUsersModel(UsersModel* _model)
         {usersModel = _model;}
+    void incomingCall();
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -81,6 +87,7 @@ signals:
     void netVolumeUpdated(int volume);
     void usersModelChanged();
     void setActiveNetType(int _netType);
+    void setCallState(int st);
 
 private slots:
     void onNewConnection();
@@ -95,7 +102,7 @@ private slots:
 
 #endif
 private:
-    void readConfig();
+    void readConfig(bool checkLastCall);
     void savePeersToConfig();
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;
@@ -109,10 +116,10 @@ private:
     QSoundEffect *m_busyTone;
     QSoundEffect *m_incomingRing;
     bool pendingCall = false;
-    void incomingCall();
     void reject(const QString & ip);
     void rejectBusy(const QString & ip);
     qint64 lastReadConfigTime = 0;
+    void setCallingState(CallInfo::State);
 
 #ifdef Q_OS_ANDROID
     QLocalServer* m_unixServer = 0;

@@ -40,13 +40,9 @@ qt_add_qml_module(appTeleLoc
         ringback.wav
         busy.wav
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
-        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
-        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocWakeReceiver.java
-        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
-        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
+        RESOURCES qtquickcontrols2.conf
 )
-
 # Линковка системных библиотек Qt
 target_link_libraries(appTeleLoc PRIVATE
     Qt6::Core
