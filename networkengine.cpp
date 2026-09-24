@@ -933,6 +933,7 @@ void NetworkEngine::debugUsers(){
             << "AP:" << m_users[i].ip[1] << "Direct:"
                  << m_users[i].ip[2] << "Alive:" << m_users[i].isAlive();
     }
+    audioEngine->toggleEchoTest();
 }
 #if 0
 QList<UserInfo> NetworkEngine::loadPeersFromConfig() {

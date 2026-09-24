@@ -24,6 +24,12 @@ public:
     QIODevice *m_audioOutputDevice;
     QByteArray m_ringBuffer, m_micBuffer;
     void setWriteToFile(bool w) {writeToFile = w;}
+    void toggleEchoTest()
+    {
+        enableEchoTest(!m_isEchoTestMode);
+        qDebug() << "@@@echo="<< m_isEchoTestMode;
+    }
+    void enableEchoTest(bool enable);
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
@@ -64,6 +70,8 @@ private:
     bool firstReceive = true;
     bool firstSend = true;
     bool writeToFile = false;
+    bool m_isEchoTestMode = false;
+
 private slots:
 };
 

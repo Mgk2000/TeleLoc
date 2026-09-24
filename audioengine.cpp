@@ -1,6 +1,10 @@
 #include "audioengine.h"
 #include "networkengine.h"
 #include <unistd.h>
+#include "audioengine.h"
+#include <QCoreApplication> // Этого инклуда достаточно для работы QNativeInterface
+#include <QJniObject>
+#include <QJniEnvironment>
 
 #include <QDir>
 #include <QStandardPaths>
@@ -47,6 +51,7 @@ AudioEngine::AudioEngine(QObject *parent)
 void AudioEngine::startRecording(const QString &targetIp)
 {
     m_targetIp = targetIp;
+
     setAndroidVoipMode(true);
 
     if (m_audioSource) {
@@ -67,7 +72,7 @@ void AudioEngine::startRecording(const QString &targetIp)
     format.setSampleFormat(QAudioFormat::Int16);
 
     if (m_audioSink) {
-        m_audioSink->setVolume(0.25);
+        m_audioSink->setVolume(0.125f);
         m_audioOutputDevice = m_audioSink->start();
     }
 
@@ -75,55 +80,43 @@ void AudioEngine::startRecording(const QString &targetIp)
     m_audioInputDevice = m_audioSource->start();
     if (!m_audioInputDevice) return;
 
-    m_ringBuffer.clear();
     m_micBuffer.clear();
 
     connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
         if (!m_audioInputDevice || !m_audioSource) return;
 
-        QByteArray data = m_audioInputDevice->readAll();
-        if (data.isEmpty()) return;
+        QByteArray chunk = m_audioInputDevice->readAll();
+        if (chunk.isEmpty()) return;
 
-        if (writeToFile && firstSend) {
+        if (firstSend) {
             startWriteToFile("sender");
             firstSend = false;
         }
-        if (writeToFile &&  m_unixFileSenderIn.isOpen()) {
-            m_unixFileSenderIn.write(data);
-            m_unixSizeSenderIn += data.size();
+
+        if (m_unixFileSenderIn.isOpen()) {
+            m_unixFileSenderIn.write(chunk);
         }
 
-        m_micBuffer.append(data);
+        int len = chunk.size();
+        int currentVolume = 0;
+        short *ptr = reinterpret_cast<short*>(chunk.data());
 
-        if (m_micBuffer.size() > 3840) {
-            m_micBuffer.clear();
+        for (int i = 0; i < len / 2; ++i) {
+            int sample = ptr[i];
+            if (sample < 0) sample = -sample;
+            if (sample > currentVolume) currentVolume = sample;
         }
 
-        while (m_micBuffer.size() >= 640) {
-            QByteArray chunk = m_micBuffer.left(640);
-            m_micBuffer.remove(0, 640);
+        currentVolume = (currentVolume * 100) / 32767;
+        emit micVolumeUpdated(currentVolume);
 
-            int len = chunk.size();
-            int currentVolume = 0;
-            short *ptr = reinterpret_cast<short*>(chunk.data());
+        if (m_unixFileSenderNet.isOpen()) {
+            m_unixFileSenderNet.write(chunk);
+            m_unixSizeSenderNet += chunk.size();
+        }
 
-            for (int i = 0; i < len / 2; ++i) {
-                int sample = ptr[i];
-                if (sample < 0) sample = -sample;
-                if (sample > currentVolume) currentVolume = sample;
-            }
-
-            currentVolume = (currentVolume * 100) / 32767;
-            emit micVolumeUpdated(currentVolume);
-
-            if (writeToFile &&  m_unixFileSenderNet.isOpen()) {
-                m_unixFileSenderNet.write(chunk);
-                m_unixSizeSenderNet += chunk.size();
-            }
-
-            if (!m_unixIsMuted && m_udpAudioSender) {
-                m_udpAudioSender->writeDatagram(chunk, QHostAddress(m_targetIp), 28002);
-            }
+        if (!m_unixIsMuted && m_udpAudioSender) {
+            m_udpAudioSender->writeDatagram(chunk, QHostAddress(m_targetIp), 28002);
         }
     });
 }
@@ -163,31 +156,46 @@ void AudioEngine::stop()
 
 void AudioEngine::setAndroidVoipMode(bool enable) {
 #ifdef Q_OS_ANDROID
+    qDebug() << "@@@echo setAndroidVoipMode 1 enable=" << enable;
     QJniEnvironment env;
     if (!env.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 2";
 
-    QJniObject activity = QJniObject::callStaticObjectMethod(
-        "org/qtproject/qt/android/QtNative", "activity", "android/app/Activity");
-    if (!activity.isValid()) return;
-
-    QJniObject context = activity.callObjectMethod("getApplicationContext", "()android/content/Context;");
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 4";
 
     QJniObject audioServiceString = QJniObject::getStaticObjectField(
         "android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
     if (!audioServiceString.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 5";
 
     QJniObject audioManager = context.callObjectMethod(
         "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
     if (!audioManager.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 6";
 
-    // 3 = MODE_IN_COMMUNICATION, 0 = MODE_NORMAL
-    int mode = enable ? 3 : 0;
+    int mode = enable ? 3 : 0; // 3 = MODE_IN_COMMUNICATION
     audioManager.callMethod<void>("setMode", "(I)V", mode);
+
+    // ПРИНУДИТЕЛЬНОЕ ВКЛЮЧЕНИЕ СИСТЕМНОГО ЭХОПОДАВЛЕНИЯ
+    if (enable) {
+        // Запрашиваем аудиосессию по умолчанию или включаем глобальный фильтр
+        audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
+
+        // Проверяем доступность аппаратного AEC в Android
+        jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
+            "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
+        qDebug() << "@@@echo Аппаратный AEC доступен в Android:" << aecAvailable;
+    }
+
+    qDebug() << "@@@echo setAndroidVoipMode 7 mode=" << mode;
 #else
     Q_UNUSED(enable);
 #endif
 }
+
+#if 0
 void AudioEngine::onReadyReadUdp()
 {
     while (m_udpAudioReceiver->hasPendingDatagrams()) {
@@ -241,6 +249,53 @@ void AudioEngine::onReadyReadUdp()
         }
     }
 }
+#endif
+void AudioEngine::onReadyReadUdp()
+{
+    while (m_udpAudioReceiver->hasPendingDatagrams()) {
+        QByteArray chunk;
+        QHostAddress senderAddress;
+        quint16 senderPort;
+
+        chunk.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
+        int dataSize = chunk.size();
+        m_udpAudioReceiver->readDatagram(chunk.data(), dataSize, &senderAddress, &senderPort);
+        inAudioSize += dataSize;
+
+        if (chunk.isEmpty()) continue;
+
+        if (m_isEchoTestMode && m_udpAudioSender) {
+            m_udpAudioSender->writeDatagram(chunk, senderAddress, 28002);
+        }
+
+        if (m_unixFileReceiverNet.isOpen()) {
+            m_unixFileReceiverNet.write(chunk);
+            m_unixSizeReceiverNet += chunk.size();
+        }
+
+        int len = chunk.size();
+        int currentVolume = 0;
+        const short *ptr = reinterpret_cast<const short*>(chunk.constData());
+
+        for (int i = 0; i < len / 2; ++i) {
+            int sample = ptr[i];
+            if (sample < 0) sample = -sample;
+            if (sample > currentVolume) currentVolume = sample;
+        }
+        currentVolume = (currentVolume * 100) / 32767;
+        emit netVolumeUpdated(currentVolume);
+
+        if (m_unixFileReceiverOut.isOpen()) {
+            m_unixFileReceiverOut.write(chunk);
+            m_unixSizeReceiverOut += chunk.size();
+        }
+
+        if (m_audioOutputDevice && m_audioOutputDevice->isOpen()) {
+            m_audioOutputDevice->write(chunk);
+        }
+    }
+}
+
 void AudioEngine::muteMicrophone(bool mute)
 {
     m_unixIsMuted = mute;
@@ -299,7 +354,7 @@ void AudioEngine::startWriteToFile(const QString &role)
         return ::dup(static_cast<int>(nativeFd));
     };
 
-    if (m_unixCurrentRole == "sender") {
+    if (true||m_unixCurrentRole == "sender") {
         m_unixSizeSenderIn = 0; m_unixSizeSenderNet = 0;
         int fdIn = getAndroidNativeFd("SenderIn.wav");
         qDebug() << "@@@  startWriteToFile 8 ";  ;
@@ -313,7 +368,7 @@ void AudioEngine::startWriteToFile(const QString &role)
         qDebug() << "@@@  startWriteToFile 11 ";  ;
 
     }
-    else if (m_unixCurrentRole == "receiver") {
+    if (true || m_unixCurrentRole == "receiver") {
         qDebug() << "@@@  startWriteToFile 12 ";  ;
 
         m_unixSizeReceiverNet = 0; m_unixSizeReceiverOut = 0;
@@ -414,3 +469,16 @@ void AudioEngine::onTimer()
     outAuioSize = 0;
 }
 
+void AudioEngine::enableEchoTest(bool enable)
+{
+    m_isEchoTestMode = enable;
+
+    // Если мы стали эхо-зеркалом, нам нужно открыть динамик на запись холостых данных
+    if (m_isEchoTestMode) {
+        setAndroidVoipMode(true);
+        if (m_audioSink) {
+            m_audioSink->setVolume(0.125f);
+            m_audioOutputDevice = m_audioSink->start();
+        }
+    }
+}
