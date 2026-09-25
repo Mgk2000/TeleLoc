@@ -365,7 +365,7 @@ private void setName(String name)
                 cnt++;
                 int us = users.size();
                 Log.d(TAG, "@@@ssd users=" +us + "running=" + m_isRunning );
-               while (m_isRunning) {
+               while (true || m_isRunning) {
                 try {
                     //if (us <=0 || users.get(0).name.equals(""))
                     //return;
@@ -406,7 +406,7 @@ private void setName(String name)
                 byte[] bytes = json.getBytes("UTF-8");
                 java.net.DatagramSocket socket = new java.net.DatagramSocket();
                 socket.setBroadcast(true);
-                 //Log.d(TAG, "@@@  SendDiscovery 3 " + json);
+                 Log.d(TAG, "@@@upd  SendDiscovery 3 " + json);
                  String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
                  for (String ip : ips) {
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
@@ -798,6 +798,7 @@ private void updatePeer(String name, String sip) {
 //Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
+    if (name != users.get(0).name)
     Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
    // Log.d(TAG,  "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
     String[] ip = new String[3];

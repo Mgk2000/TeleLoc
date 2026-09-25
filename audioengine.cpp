@@ -195,61 +195,6 @@ void AudioEngine::setAndroidVoipMode(bool enable) {
 #endif
 }
 
-#if 0
-void AudioEngine::onReadyReadUdp()
-{
-    while (m_udpAudioReceiver->hasPendingDatagrams()) {
-        QByteArray datagram;
-        datagram.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
-        int dataSize = datagram.size();
-        m_udpAudioReceiver->readDatagram(datagram.data(), dataSize);
-        inAudioSize += dataSize;
-        qDebug() << "@@@ sound in " << dataSize;
-        m_ringBuffer.append(datagram);
-
-        if (m_ringBuffer.size() > 3840) {
-            m_ringBuffer.clear();
-        }
-
-        while (m_ringBuffer.size() >= 640) {
-            QByteArray chunk = m_ringBuffer.left(640);
-            m_ringBuffer.remove(0, 640);
-
-            if (chunk.isEmpty()) continue;
-            if (firstReceive && writeToFile)
-            {
-                firstReceive = false;
-                startWriteToFile("receiver");
-            }
-            if (writeToFile && m_unixFileReceiverNet.isOpen()) {
-                m_unixFileReceiverNet.write(chunk);
-                m_unixSizeReceiverNet += chunk.size();
-            }
-
-            int len = chunk.size();
-            int currentVolume = 0;
-            const short *ptr = reinterpret_cast<const short*>(chunk.constData());
-
-            for (int i = 0; i < len / 2; ++i) {
-                int sample = ptr[i];
-                if (sample < 0) sample = -sample;
-                if (sample > currentVolume) currentVolume = sample;
-            }
-            currentVolume = (currentVolume * 100) / 32767;
-            emit netVolumeUpdated(currentVolume);
-
-            if (writeToFile && m_unixFileReceiverOut.isOpen()) {
-                m_unixFileReceiverOut.write(chunk);
-                m_unixSizeReceiverOut += chunk.size();
-            }
-
-            if (m_audioOutputDevice && m_audioOutputDevice->isOpen()) {
-                m_audioOutputDevice->write(chunk);
-            }
-        }
-    }
-}
-#endif
 void AudioEngine::onReadyReadUdp()
 {
     while (m_udpAudioReceiver->hasPendingDatagrams()) {
@@ -263,6 +208,23 @@ void AudioEngine::onReadyReadUdp()
         inAudioSize += dataSize;
 
         if (chunk.isEmpty()) continue;
+        // Вычисляем количество каналов в прилетевшем пакете
+        // При частоте 16кГц фрейм 20мс для Моно - это 640 байт.
+        // Если пришло 1280 байт (или больше), значит это физическое СТЕРЕО.
+        int incomingChannels = (chunk.size() >= 1280) ? 2 : 1;
+
+        if (false && incomingChannels == 2) {
+            QByteArray monoChunk;
+            monoChunk.reserve(chunk.size() / 2);
+            const short *ptr = reinterpret_cast<const short*>(chunk.constData());
+
+            // Схлопываем 2 канала в 1, забирая только левый канал
+            for (int i = 0; i < chunk.size() / 2; i += 2) {
+                short sample = ptr[i];
+                monoChunk.append(reinterpret_cast<const char*>(&sample), 2);
+            }
+            chunk = monoChunk;
+        }
 
         if (m_isEchoTestMode && m_udpAudioSender) {
             m_udpAudioSender->writeDatagram(chunk, senderAddress, 28002);

@@ -5,15 +5,14 @@ import QtQuick.Controls
 Popup {
     id: callScreenPopup
     width: parent ? parent.width : 360
-    height: parent ? parent.height : 640
-
-    modal: true
+    height: parent ? (developer ? parent.height -150 : parent.height) : 640
+    modal: ! developer
     focus: true
     closePolicy: Popup.NoAutoClose
 
     // Позиционируем в левый верхний угол overlay-слоя
     x: 0
-    y: 0
+    y:  developer ? 150 : 0
 
     parent: Overlay.overlay
 
