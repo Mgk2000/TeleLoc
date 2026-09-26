@@ -141,16 +141,23 @@ void AudioEngine::startRecording(const QString &targetIp)
         while (m_micBuffer.size() >= 640) {
             QByteArray chunk = m_micBuffer.left(640);
             m_micBuffer.remove(0, 640);
-            // --- НАЧАЛО ПОДАВЛЕНИЯ ЭХО (ЭХО-ДАМПИНГ) ---
-            if (m_isOutputPlaying) {
+
+            // --- ОБНОВЛЕННОЕ ПОДАВЛЕНИЕ ЭХО И СВИСТА ---
+            qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+
+            // Если с момента последней записи в динамик прошло МЕНЬШЕ 150 мс,
+            // значит, звук СЕЙЧАС физически идет из динамика телефона.
+            if (currentTime - m_lastTimeOutputPlayed < 150) {
                 short *pcmData = reinterpret_cast<short*>(chunk.data());
                 int samplesCount = chunk.size() / 2;
                 for (int i = 0; i < samplesCount; ++i) {
-                    // Ослабляем сигнал микрофона в 5 раз (на 80%), пока говорит собеседник
-                    pcmData[i] = static_cast<short>(pcmData[i] * 0.2f);
+                    // Агрессивно душим микрофон в 10 раз (на 90%), полностью ломая петлю свиста
+                    pcmData[i] = static_cast<short>(pcmData[i] * 0.1f);
                 }
             }
-            // --- КОНЕЦ ПОДАВЛЕНИЯ ЭХО ---
+            // --- КОНЕЦ ПОДАВЛЕНИЯ ---
+
+            // Далее ваш стандартный расчет currentVolume и кодирование Opus...
 
             int len = chunk.size();
             int currentVolume = 0;
@@ -609,6 +616,8 @@ void AudioEngine::processAudioOutput()
         bytesWritten = true;
     }
 
-    // Запоминаем: если мы только что что-то сыграли, значит динамик активен
-    m_isOutputPlaying = bytesWritten;
+    // Если мы записали данные в буфер Android, запоминаем текущее системное время
+    if (bytesWritten) {
+        m_lastTimeOutputPlayed = QDateTime::currentMSecsSinceEpoch();
+    }
 }
