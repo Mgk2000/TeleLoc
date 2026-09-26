@@ -12,7 +12,9 @@
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QJniEnvironment>
+#include <opus.h>
 #endif
+
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
     , m_audioOutputDevice(nullptr)
@@ -73,8 +75,25 @@ void AudioEngine::startRecording(const QString &targetIp)
 
     if (m_audioSink) {
         m_audioSink->setVolume(0.125f);
+        m_audioSink->setBufferSize(35280);
         m_audioOutputDevice = m_audioSink->start();
     }
+
+    if (m_opusEncoder) {
+        opus_encoder_destroy(reinterpret_cast<OpusEncoder*>(m_opusEncoder));
+        m_opusEncoder = nullptr;
+    }
+    if (m_opusDecoder) {
+        opus_decoder_destroy(reinterpret_cast<OpusDecoder*>(m_opusDecoder));
+        m_opusDecoder = nullptr;
+    }
+
+    int error = 0;
+    m_opusEncoder = opus_encoder_create(16000, 1, OPUS_APPLICATION_VOIP, &error);
+    if (error == OPUS_OK) {
+        opus_encoder_ctl(reinterpret_cast<OpusEncoder*>(m_opusEncoder), OPUS_SET_BITRATE(16000));
+    }
+    m_opusDecoder = opus_decoder_create(16000, 1, &error);
 
     m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
     m_audioInputDevice = m_audioSource->start();
@@ -85,8 +104,8 @@ void AudioEngine::startRecording(const QString &targetIp)
     connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
         if (!m_audioInputDevice || !m_audioSource) return;
 
-        QByteArray chunk = m_audioInputDevice->readAll();
-        if (chunk.isEmpty()) return;
+        QByteArray data = m_audioInputDevice->readAll();
+        if (data.isEmpty()) return;
 
         if (firstSend) {
             startWriteToFile("sender");
@@ -94,29 +113,56 @@ void AudioEngine::startRecording(const QString &targetIp)
         }
 
         if (m_unixFileSenderIn.isOpen()) {
-            m_unixFileSenderIn.write(chunk);
+            m_unixFileSenderIn.write(data);
         }
 
-        int len = chunk.size();
-        int currentVolume = 0;
-        short *ptr = reinterpret_cast<short*>(chunk.data());
+        m_micBuffer.append(data);
 
-        for (int i = 0; i < len / 2; ++i) {
-            int sample = ptr[i];
-            if (sample < 0) sample = -sample;
-            if (sample > currentVolume) currentVolume = sample;
+        if (m_micBuffer.size() > 3840) {
+            m_micBuffer.clear();
         }
 
-        currentVolume = (currentVolume * 100) / 32767;
-        emit micVolumeUpdated(currentVolume);
+        while (m_micBuffer.size() >= 640) {
+            QByteArray chunk = m_micBuffer.left(640);
+            m_micBuffer.remove(0, 640);
 
-        if (m_unixFileSenderNet.isOpen()) {
-            m_unixFileSenderNet.write(chunk);
-            m_unixSizeSenderNet += chunk.size();
-        }
+            int len = chunk.size();
+            int currentVolume = 0;
+            short *ptr = reinterpret_cast<short*>(chunk.data());
 
-        if (!m_unixIsMuted && m_udpAudioSender) {
-            m_udpAudioSender->writeDatagram(chunk, QHostAddress(m_targetIp), 28002);
+            for (int i = 0; i < len / 2; ++i) {
+                int sample = ptr[i];
+                if (sample < 0) sample = -sample;
+                if (sample > currentVolume) currentVolume = sample;
+            }
+
+            currentVolume = (currentVolume * 100) / 32767;
+            emit micVolumeUpdated(currentVolume);
+
+            if (m_unixFileSenderNet.isOpen()) {
+                m_unixFileSenderNet.write(chunk);
+                m_unixSizeSenderNet += chunk.size();
+            }
+
+            if (!m_unixIsMuted && m_udpAudioSender && m_opusEncoder) {
+                unsigned char compressedData[256];
+                int compressedBytes = opus_encode(
+                    reinterpret_cast<OpusEncoder*>(m_opusEncoder),
+                    reinterpret_cast<const opus_int16*>(chunk.constData()),
+                    320,
+                    compressedData,
+                    sizeof(compressedData)
+                    );
+
+                if (compressedBytes > 0) {
+                    m_udpAudioSender->writeDatagram(
+                        reinterpret_cast<const char*>(compressedData),
+                        compressedBytes,
+                        QHostAddress(m_targetIp),
+                        28002
+                        );
+                }
+            }
         }
     });
 }
@@ -187,6 +233,9 @@ void AudioEngine::setAndroidVoipMode(bool enable) {
         jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
             "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
         qDebug() << "@@@echo Аппаратный AEC доступен в Android:" << aecAvailable;
+
+            // 3 = STREAM_VOICE_CALL (переключает логику микширования Android на телефонный стандарт)
+            audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
     }
 
     qDebug() << "@@@echo setAndroidVoipMode 7 mode=" << mode;
@@ -208,22 +257,24 @@ void AudioEngine::onReadyReadUdp()
         inAudioSize += dataSize;
 
         if (chunk.isEmpty()) continue;
-        // Вычисляем количество каналов в прилетевшем пакете
-        // При частоте 16кГц фрейм 20мс для Моно - это 640 байт.
-        // Если пришло 1280 байт (или больше), значит это физическое СТЕРЕО.
-        int incomingChannels = (chunk.size() >= 1280) ? 2 : 1;
 
-        if (false && incomingChannels == 2) {
-            QByteArray monoChunk;
-            monoChunk.reserve(chunk.size() / 2);
-            const short *ptr = reinterpret_cast<const short*>(chunk.constData());
+        if (m_opusDecoder) {
+            int sz1 = chunk.size();
+            short decompressedPcm[320];
+            int decodedSamples = opus_decode(
+                reinterpret_cast<OpusDecoder*>(m_opusDecoder),
+                reinterpret_cast<const unsigned char*>(chunk.constData()),
+                chunk.size(),
+                decompressedPcm,
+                320,
+                0
+                );
 
-            // Схлопываем 2 канала в 1, забирая только левый канал
-            for (int i = 0; i < chunk.size() / 2; i += 2) {
-                short sample = ptr[i];
-                monoChunk.append(reinterpret_cast<const char*>(&sample), 2);
+            if (decodedSamples > 0) {
+                chunk = QByteArray(reinterpret_cast<const char*>(decompressedPcm), decodedSamples * 2);
+                int sz2 = chunk.size();
+                qDebug() << "@@@codec decode sz1, sz2=" << sz1 << sz2;
             }
-            chunk = monoChunk;
         }
 
         if (m_isEchoTestMode && m_udpAudioSender) {

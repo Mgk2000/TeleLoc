@@ -71,6 +71,8 @@ private:
     bool firstSend = true;
     bool writeToFile = false;
     bool m_isEchoTestMode = false;
+    void *m_opusEncoder = nullptr;
+    void *m_opusDecoder = nullptr;
 
 private slots:
 };

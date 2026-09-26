@@ -5,7 +5,11 @@ project(TeleLoc VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Поиск необходимых модулей Qt 6
+# Оптимизация памяти компилятора: режем тяжелые отладочные символы для Clang
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-g1 -fno-limit-debug-info)
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS
     Core
     Gui
@@ -15,12 +19,16 @@ find_package(Qt6 REQUIRED COMPONENTS
     Multimedia
 )
 
-# Автоматическая генерация мета-объектов MOC
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Определение исполняемого файла приложения (Java-файлы сюда писать НЕЛЬЗЯ!)
+# Настройка локальной сборки Opus строго без тестов и лишних утилит
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_CUSTOM_MODES ON CACHE BOOL "" FORCE)
+add_subdirectory(opus)
+
 qt_add_executable(appTeleLoc
     main.cpp
     networkengine.h
@@ -28,7 +36,7 @@ qt_add_executable(appTeleLoc
     audioengine.h
     audioengine.cpp
 )
-# Регистрация QML-модуля с жестким указанием единого пути ресурсов TeleLoc
+
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0
@@ -43,7 +51,12 @@ qt_add_qml_module(appTeleLoc
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocWakeReceiver.java
         RESOURCES qtquickcontrols2.conf
 )
-# Линковка системных библиотек Qt
+
+# Прописываем только ПУБЛИЧНЫЕ заголовочные файлы Opus
+target_include_directories(appTeleLoc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/opus/include
+)
+
 target_link_libraries(appTeleLoc PRIVATE
     Qt6::Core
     Qt6::Gui
@@ -51,14 +64,13 @@ target_link_libraries(appTeleLoc PRIVATE
     Qt6::Quick
     Qt6::Network
     Qt6::Multimedia
+    opus
 )
 
-# Специфичные настройки для Windows (средство от крякозябр)
 if(WIN32)
     target_compile_definitions(appTeleLoc PRIVATE WIN32)
 endif()
 
-# Специфичные настройки для Android
 if(ANDROID)
     set_property(TARGET appTeleLoc PROPERTY
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
