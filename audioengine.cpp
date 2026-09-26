@@ -53,7 +53,10 @@ AudioEngine::AudioEngine(QObject *parent)
 void AudioEngine::startRecording(const QString &targetIp)
 {
     m_targetIp = targetIp;
+    m_ringBuffer.clear();
+    firstReceive = true;
 
+    // Первичный перевод Android в режим связи
     setAndroidVoipMode(true);
 
     if (m_audioSource) {
@@ -74,8 +77,13 @@ void AudioEngine::startRecording(const QString &targetIp)
     format.setSampleFormat(QAudioFormat::Int16);
 
     if (m_audioSink) {
-        m_audioSink->setVolume(0.125f);
+        m_audioSink->setVolume(0.25f);
         m_audioSink->setBufferSize(35280);
+
+        // НАШИ ИСПРАВЛЕНИЯ: сбрасываем буфер перед новым вызовом
+        m_ringBuffer.clear();
+        firstReceive = true;
+
         m_audioOutputDevice = m_audioSink->start();
     }
 
@@ -95,9 +103,17 @@ void AudioEngine::startRecording(const QString &targetIp)
     }
     m_opusDecoder = opus_decoder_create(16000, 1, &error);
 
+    // Инициализируем и запускаем запись звука
     m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
     m_audioInputDevice = m_audioSource->start();
     if (!m_audioInputDevice) return;
+
+    // ИСПРАВЛЕНИЕ: Вытаскиваем сгенерированный Android Session ID из Qt 6 и принудительно включаем AEC
+    int sessionId = 0;
+#ifdef Q_OS_ANDROID
+    sessionId = m_audioSource->property("audioSessionId").toInt();
+#endif
+    setAndroidVoipMode(true, sessionId);
 
     m_micBuffer.clear();
 
@@ -125,6 +141,16 @@ void AudioEngine::startRecording(const QString &targetIp)
         while (m_micBuffer.size() >= 640) {
             QByteArray chunk = m_micBuffer.left(640);
             m_micBuffer.remove(0, 640);
+            // --- НАЧАЛО ПОДАВЛЕНИЯ ЭХО (ЭХО-ДАМПИНГ) ---
+            if (m_isOutputPlaying) {
+                short *pcmData = reinterpret_cast<short*>(chunk.data());
+                int samplesCount = chunk.size() / 2;
+                for (int i = 0; i < samplesCount; ++i) {
+                    // Ослабляем сигнал микрофона в 5 раз (на 80%), пока говорит собеседник
+                    pcmData[i] = static_cast<short>(pcmData[i] * 0.2f);
+                }
+            }
+            // --- КОНЕЦ ПОДАВЛЕНИЯ ЭХО ---
 
             int len = chunk.size();
             int currentVolume = 0;
@@ -137,8 +163,26 @@ void AudioEngine::startRecording(const QString &targetIp)
             }
 
             currentVolume = (currentVolume * 100) / 32767;
-            emit micVolumeUpdated(currentVolume);
+            // --- НАЧАЛО УСИЛЕННОГО АНТИ-СВИСТА ---
+            if (false && m_audioSink) {
+                // Снижаем порог чувствительности до 8, чтобы ловить свист на взлете
+                if (currentVolume > 8) {
+                    m_audioSink->setVolume(0.0f); // Полная тишина в динамике, пока мы говорим
 
+                    // Запоминаем время последнего громкого звука (в миллисекундах)
+                    // Для Qt 6 используем QDeadlineTimer или QElapsedTimer,
+                    // но проще всего привязать простой счетчик пакетов или QDateTime
+                    m_lastTimeSpoken = QDateTime::currentMSecsSinceEpoch();
+                } else {
+                    // Если мы молчим, проверяем, прошло ли 200 мс с последнего звука.
+                    // Это не даст эху из сети «поджечь» динамик обратно.
+                    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+                    if (currentTime - m_lastTimeSpoken > 200) {
+                        m_audioSink->setVolume(0.25f); // Возвращаем звук только после паузы
+                    }
+                }
+            }
+            // --- КОНЕЦ УСИЛЕННОГО АНТИ-СВИСТА ---
             if (m_unixFileSenderNet.isOpen()) {
                 m_unixFileSenderNet.write(chunk);
                 m_unixSizeSenderNet += chunk.size();
@@ -200,47 +244,60 @@ void AudioEngine::stop()
     firstSend = true;
 }
 
-void AudioEngine::setAndroidVoipMode(bool enable) {
+void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
 #ifdef Q_OS_ANDROID
-    qDebug() << "@@@echo setAndroidVoipMode 1 enable=" << enable;
+    qDebug() << "@@@echo setAndroidVoipMode 1 enable=" << enable << "SessionID=" << audioSessionId;
     QJniEnvironment env;
     if (!env.isValid()) return;
-    qDebug() << "@@@echo setAndroidVoipMode 2";
 
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid()) return;
-    qDebug() << "@@@echo setAndroidVoipMode 4";
 
     QJniObject audioServiceString = QJniObject::getStaticObjectField(
         "android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
     if (!audioServiceString.isValid()) return;
-    qDebug() << "@@@echo setAndroidVoipMode 5";
 
     QJniObject audioManager = context.callObjectMethod(
         "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
     if (!audioManager.isValid()) return;
-    qDebug() << "@@@echo setAndroidVoipMode 6";
 
     int mode = enable ? 3 : 0; // 3 = MODE_IN_COMMUNICATION
     audioManager.callMethod<void>("setMode", "(I)V", mode);
 
-    // ПРИНУДИТЕЛЬНОЕ ВКЛЮЧЕНИЕ СИСТЕМНОГО ЭХОПОДАВЛЕНИЯ
     if (enable) {
-        // Запрашиваем аудиосессию по умолчанию или включаем глобальный фильтр
+        // На Poco громкая связь часто ломает AEC, если включена слишком рано.
+        // Сначала настраиваем режим, включаем спикерфон.
         audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
 
-        // Проверяем доступность аппаратного AEC в Android
+        // 1. Проверяем доступность аппаратного AEC
         jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
             "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
         qDebug() << "@@@echo Аппаратный AEC доступен в Android:" << aecAvailable;
 
-            // 3 = STREAM_VOICE_CALL (переключает логику микширования Android на телефонный стандарт)
-            audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
+        // 2. Если AEC доступен и у нас есть валидный Audio Session ID от Qt
+        if (aecAvailable && audioSessionId > 0) {
+            // Вызываем статический метод создания: AcousticEchoCanceler.create(audioSessionId)
+            QJniObject aecObject = QJniObject::callStaticObjectMethod(
+                "android/media/audiofx/AcousticEchoCanceler",
+                "create",
+                "(I)Landroid/media/audiofx/AcousticEchoCanceler;",
+                audioSessionId
+                );
+
+            if (aecObject.isValid()) {
+                // Включаем эффект: aecObject.setEnabled(true)
+                jint result = aecObject.callMethod<jint>("setEnabled", "(Z)I", true);
+                qDebug() << "@@@echo Результат включения принудительного AEC:" << (result == 0 ? "УСПЕШНО" : "ОШИБКА");
+            } else {
+                qDebug() << "@@@echo Не удалось создать экземпляр AcousticEchoCanceler для сессии" << audioSessionId;
+            }
+        }
     }
 
     qDebug() << "@@@echo setAndroidVoipMode 7 mode=" << mode;
 #else
     Q_UNUSED(enable);
+    Q_UNUSED(audioSessionId);
 #endif
 }
 
@@ -251,15 +308,18 @@ void AudioEngine::onReadyReadUdp()
         QHostAddress senderAddress;
         quint16 senderPort;
 
+        // Меняем размер chunk под размер входящего пакета
         chunk.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
         int dataSize = chunk.size();
+
+        // Читаем датаграмму из сети
         m_udpAudioReceiver->readDatagram(chunk.data(), dataSize, &senderAddress, &senderPort);
         inAudioSize += dataSize;
 
         if (chunk.isEmpty()) continue;
 
+        // Декодируем Opus в PCM
         if (m_opusDecoder) {
-            int sz1 = chunk.size();
             short decompressedPcm[320];
             int decodedSamples = opus_decode(
                 reinterpret_cast<OpusDecoder*>(m_opusDecoder),
@@ -269,27 +329,26 @@ void AudioEngine::onReadyReadUdp()
                 320,
                 0
                 );
-
             if (decodedSamples > 0) {
                 chunk = QByteArray(reinterpret_cast<const char*>(decompressedPcm), decodedSamples * 2);
-                int sz2 = chunk.size();
-                qDebug() << "@@@codec decode sz1, sz2=" << sz1 << sz2;
             }
         }
 
+        // Эхо-тест
         if (m_isEchoTestMode && m_udpAudioSender) {
             m_udpAudioSender->writeDatagram(chunk, senderAddress, 28002);
         }
 
+        // Запись отладочного файла сети
         if (m_unixFileReceiverNet.isOpen()) {
             m_unixFileReceiverNet.write(chunk);
             m_unixSizeReceiverNet += chunk.size();
         }
 
+        // Подсчет уровня громкости (у вас в цикле было вычисление максимума)
         int len = chunk.size();
         int currentVolume = 0;
         const short *ptr = reinterpret_cast<const short*>(chunk.constData());
-
         for (int i = 0; i < len / 2; ++i) {
             int sample = ptr[i];
             if (sample < 0) sample = -sample;
@@ -298,14 +357,41 @@ void AudioEngine::onReadyReadUdp()
         currentVolume = (currentVolume * 100) / 32767;
         emit netVolumeUpdated(currentVolume);
 
+        // Запись второго отладочного файла
         if (m_unixFileReceiverOut.isOpen()) {
             m_unixFileReceiverOut.write(chunk);
             m_unixSizeReceiverOut += chunk.size();
         }
+        // --- ФИЛЬТР НИЖНИХ ЧАСТОТ 2-ГО ПОРЯДКА (БАТТЕРВОРТ, СРЕЗ ~3.8 КГц) ---
+        // Коэффициенты разностного уравнения фильтра
+        const float b0 = 0.3012f;
+        const float b1 = 0.6025f;
+        const float b2 = 0.3012f;
+        const float a1 = -0.4908f;
+        const float a2 = 0.6958f;
 
-        if (m_audioOutputDevice && m_audioOutputDevice->isOpen()) {
-            m_audioOutputDevice->write(chunk);
+        short *pcmPtr = reinterpret_cast<short*>(chunk.data());
+        int pcmSamplesCount = chunk.size() / 2;
+
+        for (int i = 0; i < pcmSamplesCount; ++i) {
+            float x0 = static_cast<float>(pcmPtr[i]);
+
+            // Формула фильтра второго порядка (прямая форма I)
+            float y0 = (b0 * x0) + (b1 * m_x1) + (b2 * m_x2) - (a1 * m_y1) - (a2 * m_y2);
+
+            // Сдвигаем историю сэмплов
+            m_x2 = m_x1;
+            m_x1 = x0;
+            m_y2 = m_y1;
+            m_y1 = y0;
+
+            // Записываем отфильтрованный результат обратно в PCM фрейм
+            pcmPtr[i] = static_cast<short>(y0);
         }
+        // --- КОНЕЦ ФИЛЬТРА 2-ГО ПОРЯДКА ---
+        // КЛЮЧЕВОЙ МОМЕНТ: вместо m_audioOutputDevice->write(chunk) делаем:
+        m_ringBuffer.append(chunk);
+        processAudioOutput();
     }
 }
 
@@ -494,4 +580,35 @@ void AudioEngine::enableEchoTest(bool enable)
             m_audioOutputDevice = m_audioSink->start();
         }
     }
+}
+void AudioEngine::processAudioOutput()
+{
+    if (!m_audioOutputDevice || !m_audioOutputDevice->isOpen() || !m_audioSink) {
+        return;
+    }
+
+    const int frameSize = 640;
+
+    if (firstReceive) {
+        if (m_ringBuffer.size() < (frameSize * 4)) {
+            return;
+        }
+        firstReceive = false;
+    }
+
+    if (m_ringBuffer.size() > (frameSize * 25)) {
+        m_ringBuffer.remove(0, m_ringBuffer.size() - (frameSize * 25));
+    }
+
+    bool bytesWritten = false;
+    while (m_ringBuffer.size() >= frameSize && m_audioSink->bytesFree() >= frameSize) {
+        QByteArray chunk = m_ringBuffer.left(frameSize);
+        m_ringBuffer.remove(0, frameSize);
+
+        m_audioOutputDevice->write(chunk);
+        bytesWritten = true;
+    }
+
+    // Запоминаем: если мы только что что-то сыграли, значит динамик активен
+    m_isOutputPlaying = bytesWritten;
 }

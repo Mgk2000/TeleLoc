@@ -65,7 +65,7 @@ private:
     QTimer audioTimer;
     void startAudioTimer();
     int inAudioSize = 0, outAuioSize = 0;
-    void setAndroidVoipMode(bool enable);
+    void setAndroidVoipMode(bool enable, int audioSessionId = 0);
     bool m_isTalking = false;
     bool firstReceive = true;
     bool firstSend = true;
@@ -73,8 +73,17 @@ private:
     bool m_isEchoTestMode = false;
     void *m_opusEncoder = nullptr;
     void *m_opusDecoder = nullptr;
-
+    qint64 m_lastTimeSpoken = 0;
+    // Переменные для хранения истории входных сэмплов
+    float m_x1 = 0.0f;
+    float m_x2 = 0.0f;
+    // Переменные для хранения истории выходных сэмплов
+    float m_y1 = 0.0f;
+    float m_y2 = 0.0f;
+    bool m_isOutputPlaying = false;
 private slots:
+    void processAudioOutput();
+
 };
 
 #endif // AUDIOENGINE_H
