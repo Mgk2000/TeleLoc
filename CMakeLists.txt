@@ -27,7 +27,35 @@ set(CMAKE_AUTOUIC ON)
 set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_CUSTOM_MODES ON CACHE BOOL "" FORCE)
+
+# Отключаем детекцию AVX2 в кэше Opus до добавления поддиректории
+if(WIN32 AND MINGW)
+    set(OPUS_X86_MAY_HAVE_AVX2 OFF CACHE BOOL "Disable AVX2 for MinGW compatibility" FORCE)
+    set(OPUS_X86_PRESUME_AVX2 OFF CACHE BOOL "Disable AVX2 for MinGW compatibility" FORCE)
+endif()
+
 add_subdirectory(opus)
+
+# --- ИСПРАВЛЕНИЕ ДЛЯ WINDOWS MINGW 64-BIT (Применяется строго после add_subdirectory) ---
+if(WIN32 AND MINGW)
+    message(STATUS "[TeleLoc] Принудительное отключение AVX2 и выравнивание стека для цели opus")
+
+    # 1. Отключаем AVX2/SIMD на уровне препроцессора самого Opus
+    target_compile_definitions(opus PRIVATE
+        DISABLE_AVX2
+        OPUS_DISABLE_INTRINSICS
+    )
+
+    # 2. Перекрываем внутренние флаги компилятора: запрещаем AVX2 и выравниваем стек
+    target_compile_options(opus PRIVATE
+        -mno-avx2
+        -mstackrealign
+    )
+
+    # 3. Применяем выравнивание стека и для главного приложения на всякий случай
+    add_compile_options(-mstackrealign)
+endif()
+# ---------------------------------------------------------------------------------------
 
 qt_add_executable(appTeleLoc
     main.cpp
