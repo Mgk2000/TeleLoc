@@ -3,17 +3,14 @@
 #include <unistd.h>
 #include "audioengine.h"
 #include <QCoreApplication> // Этого инклуда достаточно для работы QNativeInterface
-#include <QJniObject>
-#include <QJniEnvironment>
-
 #include <QDir>
 #include <QStandardPaths>
 
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QJniEnvironment>
-#include <opus.h>
 #endif
+#include <opus.h>
 
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
@@ -141,23 +138,16 @@ void AudioEngine::startRecording(const QString &targetIp)
         while (m_micBuffer.size() >= 640) {
             QByteArray chunk = m_micBuffer.left(640);
             m_micBuffer.remove(0, 640);
-
-            // --- ОБНОВЛЕННОЕ ПОДАВЛЕНИЕ ЭХО И СВИСТА ---
-            qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-
-            // Если с момента последней записи в динамик прошло МЕНЬШЕ 150 мс,
-            // значит, звук СЕЙЧАС физически идет из динамика телефона.
-            if (currentTime - m_lastTimeOutputPlayed < 150) {
+            // --- НАЧАЛО ПОДАВЛЕНИЯ ЭХО (ЭХО-ДАМПИНГ) ---
+            if (m_isOutputPlaying) {
                 short *pcmData = reinterpret_cast<short*>(chunk.data());
                 int samplesCount = chunk.size() / 2;
                 for (int i = 0; i < samplesCount; ++i) {
-                    // Агрессивно душим микрофон в 10 раз (на 90%), полностью ломая петлю свиста
-                    pcmData[i] = static_cast<short>(pcmData[i] * 0.1f);
+                    // Ослабляем сигнал микрофона в 5 раз (на 80%), пока говорит собеседник
+                    pcmData[i] = static_cast<short>(pcmData[i] * 0.2f);
                 }
             }
-            // --- КОНЕЦ ПОДАВЛЕНИЯ ---
-
-            // Далее ваш стандартный расчет currentVolume и кодирование Opus...
+            // --- КОНЕЦ ПОДАВЛЕНИЯ ЭХО ---
 
             int len = chunk.size();
             int currentVolume = 0;
@@ -252,6 +242,7 @@ void AudioEngine::stop()
 }
 
 void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
+//    return;
 #ifdef Q_OS_ANDROID
     qDebug() << "@@@echo setAndroidVoipMode 1 enable=" << enable << "SessionID=" << audioSessionId;
     QJniEnvironment env;
@@ -270,7 +261,7 @@ void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
 
     int mode = enable ? 3 : 0; // 3 = MODE_IN_COMMUNICATION
     audioManager.callMethod<void>("setMode", "(I)V", mode);
-
+    return;
     if (enable) {
         // На Poco громкая связь часто ломает AEC, если включена слишком рано.
         // Сначала настраиваем режим, включаем спикерфон.
@@ -278,7 +269,7 @@ void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
 
         // 1. Проверяем доступность аппаратного AEC
         jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
-            "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
+            "android/media/audiofx/AcousticEchoCanceler", "isAvailable") && false;
         qDebug() << "@@@echo Аппаратный AEC доступен в Android:" << aecAvailable;
 
         // 2. Если AEC доступен и у нас есть валидный Audio Session ID от Qt
@@ -307,7 +298,7 @@ void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
     Q_UNUSED(audioSessionId);
 #endif
 }
-
+#if 0
 void AudioEngine::onReadyReadUdp()
 {
     while (m_udpAudioReceiver->hasPendingDatagrams()) {
@@ -362,8 +353,9 @@ void AudioEngine::onReadyReadUdp()
             if (sample > currentVolume) currentVolume = sample;
         }
         currentVolume = (currentVolume * 100) / 32767;
-        emit netVolumeUpdated(currentVolume);
-
+        if (currentVolume>0)
+            emit netVolumeUpdated(currentVolume);
+        qDebug() << "@@@sound onReadyUdp Vol=" << currentVolume;
         // Запись второго отладочного файла
         if (m_unixFileReceiverOut.isOpen()) {
             m_unixFileReceiverOut.write(chunk);
@@ -399,6 +391,70 @@ void AudioEngine::onReadyReadUdp()
         // КЛЮЧЕВОЙ МОМЕНТ: вместо m_audioOutputDevice->write(chunk) делаем:
         m_ringBuffer.append(chunk);
         processAudioOutput();
+    }
+}
+#endif
+void AudioEngine::onReadyReadUdp()
+{
+    while (m_udpAudioReceiver->hasPendingDatagrams()) {
+        QByteArray chunk;
+        QHostAddress senderAddress;
+        quint16 senderPort;
+
+        chunk.resize(static_cast<int>(m_udpAudioReceiver->pendingDatagramSize()));
+        int dataSize = chunk.size();
+        m_udpAudioReceiver->readDatagram(chunk.data(), dataSize, &senderAddress, &senderPort);
+        inAudioSize += dataSize;
+
+        if (chunk.isEmpty()) continue;
+
+        if (m_opusDecoder) {
+            short decompressedPcm[320];
+            int decodedSamples = opus_decode(
+                reinterpret_cast<OpusDecoder*>(m_opusDecoder),
+                reinterpret_cast<const unsigned char*>(chunk.constData()),
+                chunk.size(),
+                decompressedPcm,
+                320,
+                0
+                );
+
+            if (decodedSamples > 0) {
+                chunk = QByteArray(reinterpret_cast<const char*>(decompressedPcm), decodedSamples * 2);
+            }
+        }
+
+        if (m_isEchoTestMode && m_udpAudioSender) {
+            m_udpAudioSender->writeDatagram(chunk, senderAddress, 28002);
+        }
+
+        if (m_unixFileReceiverNet.isOpen()) {
+            m_unixFileReceiverNet.write(chunk);
+            m_unixSizeReceiverNet += chunk.size();
+        }
+
+        int len = chunk.size();
+        int currentVolume = 0;
+        const short *ptr = reinterpret_cast<const short*>(chunk.constData());
+
+        for (int i = 0; i < len / 2; ++i) {
+            int sample = ptr[i];
+            if (sample < 0) sample = -sample;
+            if (sample > currentVolume) currentVolume = sample;
+        }
+//        currentVolume = (currentVolume * 100) / 32767;
+//        qDebug() << "@@@sound -------------------------------------- before emit vol= " << currentVolume;
+//        emit netVolumeUpdated(currentVolume);
+        qDebug() << "@@@sound ----------------------------------------after emit vol= " << currentVolume;
+
+        if (m_unixFileReceiverOut.isOpen()) {
+            m_unixFileReceiverOut.write(chunk);
+            m_unixSizeReceiverOut += chunk.size();
+        }
+
+        if (m_audioOutputDevice && m_audioOutputDevice->isOpen()) {
+            m_audioOutputDevice->write(chunk);
+        }
     }
 }
 
@@ -529,12 +585,12 @@ void AudioEngine::startWriteToFile(const QString &role)
 
 void AudioEngine::stopWriteToFile()
 {
-        if (m_unixFileSenderIn.isOpen()) { writeWavHeader(m_unixFileSenderIn, m_unixSizeSenderIn); m_unixFileSenderIn.close(); }
-        if (m_unixFileSenderNet.isOpen()) { writeWavHeader(m_unixFileSenderNet, m_unixSizeSenderNet); m_unixFileSenderNet.close(); }
-        if (m_unixFileReceiverNet.isOpen()) { writeWavHeader(m_unixFileReceiverNet, m_unixSizeReceiverNet); m_unixFileReceiverNet.close(); }
-        if (m_unixFileReceiverOut.isOpen()) { writeWavHeader(m_unixFileReceiverOut, m_unixSizeReceiverOut); m_unixFileReceiverOut.close(); }
+    if (m_unixFileSenderIn.isOpen()) { writeWavHeader(m_unixFileSenderIn, m_unixSizeSenderIn); m_unixFileSenderIn.close(); }
+    if (m_unixFileSenderNet.isOpen()) { writeWavHeader(m_unixFileSenderNet, m_unixSizeSenderNet); m_unixFileSenderNet.close(); }
+    if (m_unixFileReceiverNet.isOpen()) { writeWavHeader(m_unixFileReceiverNet, m_unixSizeReceiverNet); m_unixFileReceiverNet.close(); }
+    if (m_unixFileReceiverOut.isOpen()) { writeWavHeader(m_unixFileReceiverOut, m_unixSizeReceiverOut); m_unixFileReceiverOut.close(); }
     m_unixCurrentRole = "none";
-        firstReceive = true;
+    firstReceive = true;
     firstSend = true;
     qDebug() << "@@@ [AudioEngine] Все активные аудиофайлы успешно сохранены.";
 }
@@ -562,9 +618,9 @@ void AudioEngine::writeWavHeader(QFile &file, int dataSize)
 
 void AudioEngine::startAudioTimer()
 {
-//    connect(audioTimer, SIGNAL(timeout()), this, SLOT(onTimer()) );
+    //    connect(audioTimer, SIGNAL(timeout()), this, SLOT(onTimer()) );
     connect(&audioTimer, SIGNAL(timeout()), this, SLOT(onTimer()) );
-audioTimer.start(1000);
+    audioTimer.start(1000);
 }
 
 void AudioEngine::onTimer()
@@ -616,8 +672,6 @@ void AudioEngine::processAudioOutput()
         bytesWritten = true;
     }
 
-    // Если мы записали данные в буфер Android, запоминаем текущее системное время
-    if (bytesWritten) {
-        m_lastTimeOutputPlayed = QDateTime::currentMSecsSinceEpoch();
-    }
+    // Запоминаем: если мы только что что-то сыграли, значит динамик активен
+    m_isOutputPlaying = bytesWritten;
 }

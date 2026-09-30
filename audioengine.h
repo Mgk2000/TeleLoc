@@ -80,7 +80,7 @@ private:
     // Переменные для хранения истории выходных сэмплов
     float m_y1 = 0.0f;
     float m_y2 = 0.0f;
-    qint64 m_lastTimeOutputPlayed = 0;
+    bool m_isOutputPlaying = false;
 private slots:
     void processAudioOutput();
 

@@ -87,6 +87,8 @@ ApplicationWindow {
              micIndicatorText.text = "🎤 " + volume + "%"
          }
          function onNetVolumeUpdated(volume) {
+             if (volume !=0)
+                 console.log("@@@sound qml volume = ", volume)
              netIndicatorText.text = "🔊 " + volume + "%"
          }
          function onSetActiveNetType(_netType) {

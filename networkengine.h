@@ -21,6 +21,7 @@ struct UserInfo {
     QString name;
     QString ip[3];
     qint64 lastPing;
+    bool android;
     bool isAlive () const;
 };
 struct CallInfo {
@@ -29,6 +30,7 @@ struct CallInfo {
     int netType;
     qint64 time;
     State state = idle;
+    bool useOpus = true;
     void setState(State _state);
     bool busy() const {
         return state != idle;
@@ -76,7 +78,8 @@ public:
     void setUsersModel(UsersModel* _model)
         {usersModel = _model;}
     void incomingCall();
-signals:
+    bool isUserAndroid(const QString &name) const;
+    signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
     void incomingCall(const QString &peerName, int netType);

@@ -222,6 +222,8 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         qDebug() << "@@@incomingCall from parse accept_call";
         m_ringbackTone->stop();
         setCallingState(CallInfo::speaking);
+        bool android = m_users[0].android && isUserAndroid(name);
+        callInfo.useOpus = android;
         audioEngine->startRecording(callInfo.ip);
         emit callAccepted();
     }
@@ -260,7 +262,8 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     else if (type == "start_audio_recording") {
         qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Включаем запись Получателя.";
         // Вызываем AudioEngine в роли получателя
-        audioEngine->startWriteToFile("receiver");
+ //       if (audioEngine->writeToFile)
+ //       audioEngine->startWriteToFile("receiver");
     }
     else if (type == "stop_audio_recording") {
         qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Останавливаем запись Получателя.";
@@ -364,6 +367,9 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     }
 
     qDebug() << "$$$ before audioEngine->startRecording" << callInfo.ip;
+    bool android = m_users[0].android && isUserAndroid(targetPeerName);
+    callInfo.useOpus = android;
+
     audioEngine->startRecording(callInfo.ip);
 }
 void NetworkEngine::sendTCP(const QString& command)
@@ -459,6 +465,11 @@ void NetworkEngine::readConfig(bool checkLastCall) {
        // qDebug() << "@@@ read config 3.4";
         u.name = peerObj["name"].toString();
         u.lastPing = peerObj["lastPing"].toInteger();
+#ifdef Q_OS_ANDROID
+        u.android = true;
+#else
+        u.android = false;
+#endif
         QJsonArray ipArr = peerObj["ip"].toArray();
        // qDebug() << "@@@ read config 3.5 ipArr=" << ipArr;
         for (int i =0; i< 3; i++)
@@ -540,6 +551,7 @@ void NetworkEngine::saveConfig()
         for (int j = 0; j< 3; j++)
             ipArr.append(m_users[i].ip[j]);
         peer["ip"] = ipArr;
+        peer["android"] = m_users[i].android;
         peers.append(peer);
     }
     configObj["peers"]= peers;
@@ -774,7 +786,7 @@ void NetworkEngine::sendDiscovery() {
     QJsonObject obj;
     obj["type"] = "discovery";
     obj["name"] = me.name;
-    obj["tail"] = "Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail Tail ";
+    obj["android"] = false;
     QJsonArray ipArr;
     for (int i=0; i< 3; i++)
         ipArr.append(me.ip[i]);
@@ -1032,7 +1044,13 @@ void NetworkEngine::masterStopRecording()
     // 2. Отправляем стоп-команду по TCP
         sendTCP("stop_audio_recording");
 }
-
+bool NetworkEngine::isUserAndroid(const QString & name) const
+{
+    for (int i = 1; i < m_users.count(); i++ )
+        if (m_users[i].name == name)
+            return m_users[i].android;
+    return true;
+}
 
 //#include "networkengine.h"
 //#include <QDebug>

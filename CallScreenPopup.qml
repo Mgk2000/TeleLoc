@@ -5,7 +5,7 @@ import QtQuick.Controls
 Popup {
     id: callScreenPopup
     width: parent ? parent.width : 360
-    height: parent ? (developer ? parent.height -150 : parent.height) : 640
+    height: parent ? (developer ? parent.height -250 : parent.height) : 640
     modal: ! developer
     focus: true
     closePolicy: Popup.NoAutoClose

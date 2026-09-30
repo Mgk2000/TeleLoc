@@ -41,11 +41,12 @@ public class TeleLocService extends Service {
 		String name = "";
                 String[] ip = {"", "", ""};
                 long lastPing = 0;
+                boolean android;
                 private boolean isAlive()
                 {return System.currentTimeMillis() - lastPing < 60000000;}
 
 	}
-        private List<UserInfo> users = new ArrayList<>();
+    private List<UserInfo> users = new ArrayList<>();
     private static final String TAG = "TeleLocService";
     private static final String CHANNEL_ID_SILENT = "TeleLocSilentChannel";
     private static final String CHANNEL_ID_VOIP = "TeleLocVoipChannel";
@@ -80,7 +81,7 @@ if (users.size() !=0) return;
 Log.d(TAG, "@@@exc createMyUser() 2");
     UserInfo u = new UserInfo();
     u.name = "Malamu";
-
+    u.android = true;
     for (int i =0; i<3; i++)
         u.ip[i] = getLocalIpAddress(i);
     users.add(u);
@@ -110,6 +111,7 @@ private void readConfig() {
                     UserInfo user = new UserInfo();
                     user.name = peer.optString("name");
                     user.lastPing = peer.optLong("lastPing");
+                    user.android = peer.optInt("android") != 0;
                     org.json.JSONArray ipArr = peer.getJSONArray("ip");
                     for (int j = 0; j <3; j++)
                         user.ip[j] = ipArr.getString(j);
@@ -610,6 +612,7 @@ private String configToString(){
             ips.put(user.ip[j]);
         peer.put("ip", ips);
         peer.put("lastPing", user.lastPing);
+        peer.put("android", user.android);
         peerArr.put(peer);
         }
     configObj.put("peers", peerArr);
@@ -640,6 +643,7 @@ private String usersToString()
         org.json.JSONObject peer = new org.json.JSONObject();
         peer.put("name", users.get(i).name);
         peer.put("lastPing", users.get(i).lastPing);
+        peer.put("android", users.get(i).lastPing);
         org.json.JSONArray ipArr = new org.json.JSONArray();;
         for (int j = 0; j<3; j++)
             ipArr.put(users.get(i).ip[j]);
@@ -756,13 +760,14 @@ private void startUdpReceiver() {
 						int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
 //						Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
+                        boolean android = obj.optInt("android") == 1;
                         if ("discovery".equals(stype)) 
                         {
                             
                             //Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
 							if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
                                 ///Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Обновляю пира в конфиге: " + pName + " -> " + pIp);
-                                updatePeer(pName, pIp);
+                                updatePeer(pName, pIp, android);
                             }
 						}
 						else
@@ -791,10 +796,10 @@ if ("incoming_call1".equals(stype))
 }
 private void debugUser(UserInfo u, String prefix){
 Log.d(TAG, prefix + "user " + u.name + "ip[0]=" + u.ip[0]
- + "ip[1]=" + u.ip[1] + "ip[2]=" + u.ip[2] + "isAlive=" + u.isAlive());
+ + "ip[1]=" + u.ip[1] + "ip[2]=" + u.ip[2] + "isAlive=" + u.isAlive() + "android=" + u.android);
 }
 
-private void updatePeer(String name, String sip) {
+private void updatePeer(String name, String sip, boolean android) {
 //Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
@@ -820,6 +825,7 @@ try {
         for (int i =0; i< 3; i++)
             user0.ip[i] = ip[i];
         user0.lastPing = System.currentTimeMillis();
+        user0.android = true;
         if (false)
         for (UserInfo user : users)
         {
