@@ -75,6 +75,28 @@ private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
 public static native void sendDataToCpp(Object serviceObj, int eventId, String phoneNumber);
 //sendDataToCpp(this, 101, "{\"status\":\"ringing\"}");
 //public void executeCommandFromCpp(int commandId, String payload);
+private org.json.JSONObject readJsonConfig()
+{
+    try {
+  java.io.File file = new java.io.File(configPath);
+  //Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
+  if (file.exists()) {
+       java.io.FileInputStream fis = new java.io.FileInputStream(file);
+       byte[] data = new byte[(int) file.length()];
+       fis.read(data);
+       fis.close();
+       org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
+        return configObj;
+        }
+    else return new org.json.JSONObject();
+    }
+    catch (Exception e) {
+        Log.d(TAG, "@@@readJsonConfig" + e.getMessage());
+        e.printStackTrace();
+        }
+    return new org.json.JSONObject();
+}
+
 private void createMyUser(){
 Log.d(TAG, "@@@exc createMyUser() 1");
 if (users.size() !=0) return;
@@ -98,7 +120,7 @@ private void readConfig() {
 	 try{
 
            java.io.File file = new java.io.File(configPath);
-           Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
+           //Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
            if (file.exists()) {
                 java.io.FileInputStream fis = new java.io.FileInputStream(file);
                 byte[] data = new byte[(int) file.length()];
@@ -356,7 +378,7 @@ private void setName(String name)
 {
     users.subList(1, users.size()).clear();
     users.get(0).name = name;
-    saveConfig();
+    saveUsers();
 
 }
  public int cnt=0;
@@ -633,23 +655,33 @@ private String configToString(){
     }
 
 }
-
+private org.json.JSONArray usersToJson()
+{
+    try {
+        org.json.JSONArray peers  = new org.json.JSONArray();
+        for (int i =0; i< users.size(); i++) {
+            org.json.JSONObject peer = new org.json.JSONObject();
+            peer.put("name", users.get(i).name);
+            peer.put("lastPing", users.get(i).lastPing);
+            peer.put("android", users.get(i).lastPing);
+            org.json.JSONArray ipArr = new org.json.JSONArray();;
+            for (int j = 0; j<3; j++)
+                ipArr.put(users.get(i).ip[j]);
+            peer.put("ip", ipArr);
+            peers.put(peer);
+            }
+        return peers;
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+                    return new org.json.JSONArray();
+        }
+}
 private String usersToString()
 {
     try {
-    org.json.JSONObject configObj = new org.json.JSONObject();
-    org.json.JSONArray peers  = new org.json.JSONArray();
-    for (int i =0; i< users.size(); i++) {
-        org.json.JSONObject peer = new org.json.JSONObject();
-        peer.put("name", users.get(i).name);
-        peer.put("lastPing", users.get(i).lastPing);
-        peer.put("android", users.get(i).lastPing);
-        org.json.JSONArray ipArr = new org.json.JSONArray();;
-        for (int j = 0; j<3; j++)
-            ipArr.put(users.get(i).ip[j]);
-        peer.put("ip", ipArr);
-        peers.put(peer);
-    }
+    org.json.JSONObject configObj = readJsonConfig();
+    org.json.JSONArray peers  = usersToJson();
     configObj.put("peers", peers);
     String s = configObj.toString();
     //Log.d(TAG, "@@@conf" + s);
@@ -661,7 +693,19 @@ private String usersToString()
     return "";
     }
 }
-
+private void saveUsers()
+{
+    try {
+    org.json.JSONObject configObj = readJsonConfig();
+    org.json.JSONArray peers  = usersToJson();
+    configObj.put("peers", peers);
+    saveConfig(configObj);
+    }
+    catch (Exception e){
+    Log.d(TAG, "@@@saveusers" + e.getMessage());
+    e.printStackTrace();
+    }
+}
  private String getLocalIpAddress(int netType) {
     try {
                 //Log.d(TAG, "@@@### getLocalIpAddress" + netType);
@@ -702,11 +746,11 @@ private String usersToString()
 		return "";
     }
 }
-private void saveConfig()      {
+private void saveConfig(org.json.JSONObject obj)      {
     try {
 
         java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
-        String s = configToString();
+        String s = obj.toString();
         fos.write(s.getBytes("UTF-8"));
         fos.close();
         //Log.d(TAG, "@@@ JAVA СЛУЖБА: Конфиг успешно обновлен на диске.");
@@ -727,8 +771,10 @@ public void saveCall(String name, String ip, int netType) {
         lastCallTime = System.currentTimeMillis();
         Log.d(TAG, "@@@ saveCall" + lastCall);
         String s = lastCall.toString();
+        org.json.JSONObject obj = readJsonConfig();
+        obj.put ("lastCall", lastCall);
+        saveConfig(obj);
         Log.d(TAG, "@@@ Call saved=" +s);
-        saveConfig();
     }
     catch (Exception e) {
         e.printStackTrace();
@@ -803,8 +849,8 @@ private void updatePeer(String name, String sip, boolean android) {
 //Log.d(TAG, "@@@updatePeer 0 users=" + users.size());
 try {
     if (users.size() ==0) readConfig();
-    if (name != users.get(0).name)
-    Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
+    //if (name != users.get(0).name)
+   // Log.d(TAG, "@@@updatePeer name=" + name + " user[0]=" + users.get(0).name);
    // Log.d(TAG,  "@@@updatePeer users=" + users.size()   + " send ip=" + sip + " myip=" + users.get(0).ip);
     String[] ip = new String[3];
     org.json.JSONArray ipArr = new org.json.JSONArray(sip);
@@ -843,7 +889,7 @@ try {
                     users.remove(user);
                 }
         }
-        saveConfig();
+        saveUsers();
         return;
     }
   //  Log.d(TAG, "@@@updatePeer 3 from " +  name);
@@ -899,7 +945,7 @@ try {
             users.remove(user);
     }
 
-    saveConfig();
+    saveUsers();
 }
 catch (Exception e){
         Log.e(TAG, "@@@updatePeer JAVA СЛУЖБА ОШИБКА внутри updatePeer: " + e.getMessage());

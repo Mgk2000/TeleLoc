@@ -36,6 +36,10 @@ struct CallInfo {
         return state != idle;
     }
 };
+void writeJsonConfig(const QJsonObject & obj);
+QJsonObject readJsonConfig();
+QString configName();
+extern bool developer;
 class UsersModel;
 class NetworkEngine : public QObject
 {
@@ -53,6 +57,7 @@ public:
     Q_INVOKABLE void saveName(const QString &name);
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
+    Q_INVOKABLE void setDeveloper (bool d) {developer = d;}
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
     //QList<UserInfo> loadPeersFromConfig();
@@ -79,7 +84,8 @@ public:
         {usersModel = _model;}
     void incomingCall();
     bool isUserAndroid(const QString &name) const;
-    signals:
+
+signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
     void incomingCall(const QString &peerName, int netType);
@@ -91,7 +97,7 @@ public:
     void usersModelChanged();
     void setActiveNetType(int _netType);
     void setCallState(int st);
-
+    void autoAcceptCall();
 private slots:
     void onNewConnection();
     void onReadyTcpRead();
@@ -169,8 +175,8 @@ public:
 
     // Метод для заполнения модели вашими данными
     void setUsers(const QList<UserInfo> &users) {
-        for (int i =0; i< users.count(); i++)
-            qDebug() << "@@@setUsers " << i << users[i].name;
+        //for (int i =0; i< users.count(); i++)
+        //    qDebug() << "@@@setUsers " << i << users[i].name;
         beginResetModel();
         m_users = users.mid(1, 1000);
         endResetModel();

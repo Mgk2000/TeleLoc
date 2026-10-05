@@ -64,7 +64,8 @@ ApplicationWindow {
             customCallScreen.callerName = peerName
              customCallScreen.callNetType = netType
              customCallScreen.isIncoming = true // Флаг: входящий звонок
-
+            customCallScreen.micLevel = audioEngine.getMicLevel()
+            customCallScreen.speakerLevel = audioEngine.getSpeakerLevel()
              customCallScreen.open() // Открываем!
 
         }
@@ -83,14 +84,6 @@ ApplicationWindow {
             window.activeCallNetType = -1
             statusText.text = "Ждём"
         }
-        function onMicVolumeUpdated(volume) {
-             micIndicatorText.text = "🎤 " + volume + "%"
-         }
-         function onNetVolumeUpdated(volume) {
-             if (volume !=0)
-                 console.log("@@@sound qml volume = ", volume)
-             netIndicatorText.text = "🔊 " + volume + "%"
-         }
          function onSetActiveNetType(_netType) {
             window.activeCallNetType = _netType
          }
@@ -103,7 +96,35 @@ ApplicationWindow {
                 callingColor="#ffcccc"
             console.log("@@@state (QML) CallState=" , st, callingColor)
          }
+         function onInitMicLevel(ml)
+         {
+             callScreenPopup.micLevel = ml
+         }
+         function onInitSpeakerLevel(sl)
+         {
+             callScreenPopup.speakerLevel = sl
+         }
+         function onAutoAcceptCall(){
+            customCallScreen.open()
+            // callScreenPopup.open()
+        }
+
     }
+    Connections {
+        target: audioEngine
+        function onMicVolumeUpdated(volume) {
+             micIndicatorText.text = "🎤 " + volume + "%"
+         }
+         function onNetVolumeUpdated(volume) {
+             if (volume !=0)
+                 console.log("@@@sound qml volume = ", volume)
+             netIndicatorText.text = "🔊 " + volume + "%"
+         }
+         function onStopWritingSound() {
+           btnRecord.checked = false
+        }
+    }
+
     function toolbarHeight()
     {
         if (developer)
@@ -221,6 +242,8 @@ ApplicationWindow {
                                             customCallScreen.callerName = name
                                              customCallScreen.callNetType = 0
                                              customCallScreen.isIncoming = false // Флаг: входящий звонок
+                                            customCallScreen.micLevel = audioEngine.getMicLevel()
+                                            customCallScreen.speakerLevel = audioEngine.getSpeakerLevel()
 
                                              customCallScreen.open() // Открываем!
                                             //netEngine.startAudioCall(name, 0 | 0)
@@ -680,6 +703,9 @@ ApplicationWindow {
                         customCallScreen.callerName = userName
                          customCallScreen.callNetType = 0
                          customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                        customCallScreen.micLevel = audioEngine.getMicLevel()
+                        customCallScreen.speakerLevel = audioEngine.getSpeakerLevel()
+
                         customCallScreen.open() // Открываем!
 
                         console.log("Звонок ", userName , " по локальной сети на " + ipLocal)
@@ -717,6 +743,9 @@ ApplicationWindow {
                     customCallScreen.callerName = userName
                      customCallScreen.callNetType = 1
                      customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                    customCallScreen.micLevel = audioEngine.getMicLevel()
+                    customCallScreen.speakerLevel = audioEngine.getSpeakerLevel()
+
                     customCallScreen.open() // Открываем!
 
                     console.log("Звонок ", userName , " по локальной сети на " + ipSpot)
@@ -752,6 +781,9 @@ ApplicationWindow {
                         customCallScreen.callerName = userName
                          customCallScreen.callNetType = 2
                          customCallScreen.isIncoming = false // Флаг: исходящий звонок
+                        customCallScreen.micLevel = audioEngine.getMicLevel()
+                        customCallScreen.speakerLevel = audioEngine.getSpeakerLevel()
+
                         customCallScreen.open() // Открываем!
                         console.log("Звонок ", userName , " по локальной сети на " + ipDirect)
                     }
@@ -937,6 +969,7 @@ ApplicationWindow {
                 // При клике пользователем меняем свойство в главном окне
                 onCheckedChanged: {
                     developer = checked
+                    netEngine.setDeveloper(developer)
                 }
             }
 

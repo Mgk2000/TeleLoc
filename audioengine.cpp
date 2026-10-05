@@ -10,6 +10,7 @@
 #include <QJniObject>
 #include <QJniEnvironment>
 #endif
+#include <QJsonObject>
 #include <opus.h>
 
 AudioEngine::AudioEngine(QObject *parent)
@@ -24,7 +25,7 @@ AudioEngine::AudioEngine(QObject *parent)
     , m_unixSizeSenderNet(0)
     , m_unixSizeReceiverNet(0)
     , m_unixSizeReceiverOut(0)
-    , m_unixCurrentRole("none")
+//    , m_unixCurrentRole("none")
     , m_unixIsMuted(false)
     , m_isTalking(false)
 {
@@ -45,18 +46,22 @@ AudioEngine::AudioEngine(QObject *parent)
 
     // ВОЗВРАЩАЕМ ВАШ НАТИВНЫЙ CONNECT К ФУНКЦИИ ЧТЕНИЯ UDP
     connect(m_udpAudioReceiver, &QUdpSocket::readyRead, this, &AudioEngine::onReadyReadUdp);
+    readLevels();
 }
 
 void AudioEngine::startRecording(const QString &targetIp)
 {
+    qDebug() << "@@@startrecording 0";
+
     m_targetIp = targetIp;
     m_ringBuffer.clear();
-    firstReceive = true;
+    firstWriteToFile = true;
 
     // Первичный перевод Android в режим связи
     setAndroidVoipMode(true);
 
     if (m_audioSource) {
+        qDebug() << "@@@startrecording 1";
         m_audioSource->stop();
         m_audioSource->deleteLater();
         m_audioSource = nullptr;
@@ -64,31 +69,39 @@ void AudioEngine::startRecording(const QString &targetIp)
     m_audioInputDevice = nullptr;
 
     if (m_audioSink) {
+        qDebug() << "@@@startrecording 2";
+
         m_audioSink->stop();
         m_audioOutputDevice = nullptr;
     }
+
 
     QAudioFormat format;
     format.setSampleRate(16000);
     format.setChannelCount(1);
     format.setSampleFormat(QAudioFormat::Int16);
+    qDebug() << "@@@startrecording 3";
 
     if (m_audioSink) {
+        qDebug() << "@@@startrecording 4";
+
         m_audioSink->setVolume(0.25f);
         m_audioSink->setBufferSize(35280);
 
         // НАШИ ИСПРАВЛЕНИЯ: сбрасываем буфер перед новым вызовом
         m_ringBuffer.clear();
-        firstReceive = true;
-
         m_audioOutputDevice = m_audioSink->start();
     }
 
     if (m_opusEncoder) {
+        qDebug() << "@@@startrecording 5";
+
         opus_encoder_destroy(reinterpret_cast<OpusEncoder*>(m_opusEncoder));
         m_opusEncoder = nullptr;
     }
     if (m_opusDecoder) {
+        qDebug() << "@@@startrecording 6";
+
         opus_decoder_destroy(reinterpret_cast<OpusDecoder*>(m_opusDecoder));
         m_opusDecoder = nullptr;
     }
@@ -103,7 +116,9 @@ void AudioEngine::startRecording(const QString &targetIp)
     // Инициализируем и запускаем запись звука
     m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
     m_audioInputDevice = m_audioSource->start();
+    qDebug() << "@@@startrecording 7";
     if (!m_audioInputDevice) return;
+    qDebug() << "@@@startrecording 8";
 
     // ИСПРАВЛЕНИЕ: Вытаскиваем сгенерированный Android Session ID из Qt 6 и принудительно включаем AEC
     int sessionId = 0;
@@ -113,19 +128,19 @@ void AudioEngine::startRecording(const QString &targetIp)
     setAndroidVoipMode(true, sessionId);
 
     m_micBuffer.clear();
+    qDebug() << "@@@startrecording 9";
 
     connect(m_audioInputDevice, &QIODevice::readyRead, this, [this]() {
-        if (!m_audioInputDevice || !m_audioSource) return;
+        qDebug() << "@@@startrecording loop 1";
+        if (!m_audioInputDevice || !m_audioSource || m_unixIsMuted) return;
+        qDebug() << "@@@startrecording loop 2";
 
         QByteArray data = m_audioInputDevice->readAll();
         if (data.isEmpty()) return;
 
-        if (firstSend) {
-            startWriteToFile("sender");
-            firstSend = false;
-        }
-
-        if (m_unixFileSenderIn.isOpen()) {
+        if (writeToFile) {
+            if (firstWriteToFile)
+                startWriteToFile("sender");
             m_unixFileSenderIn.write(data);
         }
 
@@ -180,12 +195,12 @@ void AudioEngine::startRecording(const QString &targetIp)
                 }
             }
             // --- КОНЕЦ УСИЛЕННОГО АНТИ-СВИСТА ---
-            if (m_unixFileSenderNet.isOpen()) {
+            if (writeToFile){
                 m_unixFileSenderNet.write(chunk);
                 m_unixSizeSenderNet += chunk.size();
             }
 
-            if (!m_unixIsMuted && m_udpAudioSender && m_opusEncoder) {
+            if (m_udpAudioSender && m_opusEncoder) {
                 unsigned char compressedData[256];
                 int compressedBytes = opus_encode(
                     reinterpret_cast<OpusEncoder*>(m_opusEncoder),
@@ -237,8 +252,7 @@ void AudioEngine::stop()
     if (m_unixFileReceiverOut.isOpen()) m_unixFileReceiverOut.close();
 
     setAndroidVoipMode(false);
-    firstReceive = true;
-    firstSend = true;
+    firstWriteToFile = true;
 }
 
 void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
@@ -247,20 +261,26 @@ void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
     qDebug() << "@@@echo setAndroidVoipMode 1 enable=" << enable << "SessionID=" << audioSessionId;
     QJniEnvironment env;
     if (!env.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 2";
 
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 3";
 
     QJniObject audioServiceString = QJniObject::getStaticObjectField(
         "android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
     if (!audioServiceString.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 4";
 
     QJniObject audioManager = context.callObjectMethod(
         "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
     if (!audioManager.isValid()) return;
+    qDebug() << "@@@echo setAndroidVoipMode 5";
 
     int mode = enable ? 3 : 0; // 3 = MODE_IN_COMMUNICATION
     audioManager.callMethod<void>("setMode", "(I)V", mode);
+    qDebug() << "@@@echo setAndroidVoipMode 6";
+
     return;
     if (enable) {
         // На Poco громкая связь часто ломает AEC, если включена слишком рано.
@@ -292,11 +312,28 @@ void AudioEngine::setAndroidVoipMode(bool enable, int audioSessionId) {
         }
     }
 
-    qDebug() << "@@@echo setAndroidVoipMode 7 mode=" << mode;
+    qDebug() << "@@@echo setAndroidVoipMode 7";
 #else
     Q_UNUSED(enable);
     Q_UNUSED(audioSessionId);
 #endif
+}
+
+void AudioEngine::saveLevels()
+{
+    QJsonObject obj = readJsonConfig();
+    obj["micLevel"] = m_micLevel;
+    obj["speakerLevel"] = m_speakerLevel;
+    writeJsonConfig(obj);
+    obj = readJsonConfig();
+    qDebug() << "@@@sound savedconfig=" << obj;
+}
+void AudioEngine::readLevels()
+{
+    QJsonObject obj = readJsonConfig();
+    m_micLevel = obj["micLevel"].toInt(50);
+    m_speakerLevel = obj["speakerLevel"].toInt(50);
+
 }
 #if 0
 void AudioEngine::onReadyReadUdp()
@@ -427,6 +464,10 @@ void AudioEngine::onReadyReadUdp()
         if (m_isEchoTestMode && m_udpAudioSender) {
             m_udpAudioSender->writeDatagram(chunk, senderAddress, 28002);
         }
+        if (firstWriteToFile && writeToFile) {
+            startWriteToFile("receiver");
+            firstWriteToFile = false;
+        }
 
         if (m_unixFileReceiverNet.isOpen()) {
             m_unixFileReceiverNet.write(chunk);
@@ -442,17 +483,30 @@ void AudioEngine::onReadyReadUdp()
             if (sample < 0) sample = -sample;
             if (sample > currentVolume) currentVolume = sample;
         }
-//        currentVolume = (currentVolume * 100) / 32767;
+        currentVolume = (currentVolume * 100) / 32767;
 //        qDebug() << "@@@sound -------------------------------------- before emit vol= " << currentVolume;
-//        emit netVolumeUpdated(currentVolume);
+        emit netVolumeUpdated(currentVolume);
         qDebug() << "@@@sound ----------------------------------------after emit vol= " << currentVolume;
+        // --- ФИЛЬТР НИЖНИХ ЧАСТОТ (СРЕЗ ВЫШЕ 4.5 КГц) ---
+        // Коэффициент альфа для частоты 16кГц и среза ~4500 Гц равен 0.65
+        const float alpha = 0.65f;
+        short *pcmPtr = reinterpret_cast<short*>(chunk.data());
+        int pcmSamplesCount = chunk.size() / 2;
 
+        for (int i = 0; i < pcmSamplesCount; ++i) {
+            float inputSample = static_cast<float>(pcmPtr[i]);
+            // Классическая формула цифрового RC-фильтра
+            m_lpfS1 = m_lpfS1 + alpha * (inputSample - m_lpfS1);
+            pcmPtr[i] = static_cast<short>(m_lpfS1);
+        }
+        // --- КОНЕЦ ФИЛЬТРА --
         if (m_unixFileReceiverOut.isOpen()) {
             m_unixFileReceiverOut.write(chunk);
             m_unixSizeReceiverOut += chunk.size();
         }
-
+        qDebug() << "@@@audioOut 1";
         if (m_audioOutputDevice && m_audioOutputDevice->isOpen()) {
+            qDebug() << "@@@audioOut 2";
             m_audioOutputDevice->write(chunk);
         }
     }
@@ -476,7 +530,7 @@ void AudioEngine::muteMicrophone(bool mute)
 void AudioEngine::startWriteToFile(const QString &role)
 {
     qDebug() << "@@@  startWriteToFile 1" << role;;
-    m_unixCurrentRole = role;
+//    m_unixCurrentRole = role;
     QByteArray dummyHeader;
     dummyHeader.resize(44);
 
@@ -485,7 +539,7 @@ void AudioEngine::startWriteToFile(const QString &role)
 #ifdef Q_OS_ANDROID
     // --- ПЛАТФОРМЕННЫЙ КОД ДЛЯ ANDROID (ЧЕРЕЗ ДЕСКРИПТОРЫ) ---
     auto getAndroidNativeFd = [](const QString &fileName) -> int {
-        qDebug() << "@@@  startWriteToFile 2"  ;
+        qDebug() << "@@@startWriteToFile 2"  ;
 
         QJniObject publicDir = QJniObject::callStaticObjectMethod(
             "android/os/Environment",
@@ -493,7 +547,7 @@ void AudioEngine::startWriteToFile(const QString &role)
             "(Ljava/lang/String;)Ljava/io/File;",
             QJniObject::getStaticObjectField("android/os/Environment", "DIRECTORY_MUSIC", "Ljava/lang/String;").object()
             );
-        qDebug() << "@@@  startWriteToFile 3 dir =";  ;
+        qDebug() << "@@@startWriteToFile 3 dir =";  ;
 
         if (!publicDir.isValid()) return -1;
 
@@ -503,7 +557,7 @@ void AudioEngine::startWriteToFile(const QString &role)
 
         QJniObject fos("java/io/FileOutputStream", "(Ljava/io/File;)V", javaFile.object());
         if (!fos.isValid()) return -1;
-        qDebug() << "@@@  startWriteToFile 5 ";  ;
+        qDebug() << "@@@startWriteToFile 5 ";  ;
 
         QJniObject fdObj = fos.callObjectMethod("getFD", "()Ljava/io/FileDescriptor;");
         qDebug() << "@@@  startWriteToFile 6 ";  ;
@@ -511,35 +565,37 @@ void AudioEngine::startWriteToFile(const QString &role)
         if (!fdObj.isValid()) return -1;
 
         jint nativeFd = fdObj.getField<jint>("descriptor");
-        qDebug() << "@@@  startWriteToFile 7 ";  ;
+        qDebug() << "@@@startWriteToFile 7 ";  ;
 
         return ::dup(static_cast<int>(nativeFd));
     };
 
-    if (true||m_unixCurrentRole == "sender") {
+    if (true /*||m_unixCurrentRole == "sender"*/) {
         m_unixSizeSenderIn = 0; m_unixSizeSenderNet = 0;
         int fdIn = getAndroidNativeFd("SenderIn.wav");
-        qDebug() << "@@@  startWriteToFile 8 ";  ;
+        qDebug() << "@@@startWriteToFile 8 ";  ;
 
         if (fdIn >= 0) m_unixFileSenderIn.open(fdIn, QIODevice::WriteOnly | QIODevice::Truncate);
-        qDebug() << "@@@  startWriteToFile 9 ";  ;
+        qDebug() << "@@@startWriteToFile 9 ";  ;
 
         int fdNet = getAndroidNativeFd("SenderNet.wav");
-        qDebug() << "@@@  startWriteToFile 10 fdnet="  << fdNet;
+        qDebug() << "@@@startWriteToFile 10 fdnet="  << fdNet;
         if (fdNet >= 0) m_unixFileSenderNet.open(fdNet, QIODevice::WriteOnly | QIODevice::Truncate);
-        qDebug() << "@@@  startWriteToFile 11 ";  ;
+        qDebug() << "@@@startWriteToFile 11 ";  ;
 
     }
-    if (true || m_unixCurrentRole == "receiver") {
-        qDebug() << "@@@  startWriteToFile 12 ";  ;
+    if (true /*|| m_unixCurrentRole == "receiver"*/) {
+        qDebug() << "@@@startWriteToFile 12 ";  ;
 
         m_unixSizeReceiverNet = 0; m_unixSizeReceiverOut = 0;
         int fdRecNet = getAndroidNativeFd("ReceiverNet.wav");
-        qDebug() << "@@@  startWriteToFile 13 fdnet="  << fdRecNet;
-        if (fdRecNet >= 0) m_unixFileReceiverNet.open(fdRecNet, QIODevice::WriteOnly | QIODevice::Truncate);
+        qDebug() << "@@@startWriteToFile 13 fdnet="  << fdRecNet;
+        if (fdRecNet >= 0 && !m_unixFileReceiverNet.isOpen())
+            m_unixFileReceiverNet.open(fdRecNet, QIODevice::WriteOnly | QIODevice::Truncate);
         int fdRecOut = getAndroidNativeFd("ReceiverOut.wav");
-        qDebug() << "@@@  startWriteToFile 14 fdnet="  << fdRecNet;
-        if (fdRecOut >= 0) m_unixFileReceiverOut.open(fdRecOut, QIODevice::WriteOnly | QIODevice::Truncate);
+        qDebug() << "@@@startWriteToFile 14 fdnet="  << fdRecNet;
+        if (fdRecOut >= 0 && !m_unixFileReceiverOut.isOpen())
+            m_unixFileReceiverOut.open(fdRecOut, QIODevice::WriteOnly | QIODevice::Truncate);
     }
     qDebug() << "@@@ [AudioEngine] Android: Нативная запись запущена.";
 
@@ -548,51 +604,45 @@ void AudioEngine::startWriteToFile(const QString &role)
     musicPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
     QDir().mkpath(musicPath);
 
-    if (m_unixCurrentRole == "sender") {
         m_unixSizeSenderIn = 0; m_unixSizeSenderNet = 0;
         m_unixFileSenderIn.setFileName(musicPath + "/SenderIn.wav");
         m_unixFileSenderIn.open(QIODevice::WriteOnly | QIODevice::Truncate);
         m_unixFileSenderNet.setFileName(musicPath + "/SenderNet.wav");
         m_unixFileSenderNet.open(QIODevice::WriteOnly | QIODevice::Truncate);
-    }
-    else if (m_unixCurrentRole == "receiver") {
         m_unixSizeReceiverNet = 0; m_unixSizeReceiverOut = 0;
         m_unixFileReceiverNet.setFileName(musicPath + "/ReceiverNet.wav");
         m_unixFileReceiverNet.open(QIODevice::WriteOnly | QIODevice::Truncate);
         m_unixFileReceiverOut.setFileName(musicPath + "/ReceiverOut.wav");
         m_unixFileReceiverOut.open(QIODevice::WriteOnly | QIODevice::Truncate);
-    }
     qDebug() << "@@@ [AudioEngine] Windows: Запись запущена по пути:" << musicPath;
 #endif
 
     // Записываем пустые заголовки
-    if (m_unixCurrentRole == "sender") {
         if (m_unixFileSenderIn.isOpen()) m_unixFileSenderIn.write(dummyHeader);
         qDebug() << "@@@  startWriteToFile 15 ";
 
         if (m_unixFileSenderNet.isOpen()) m_unixFileSenderNet.write(dummyHeader);
         qDebug() << "@@@  startWriteToFile 16 ";
 
-    } else if (m_unixCurrentRole == "receiver") {
         if (m_unixFileReceiverNet.isOpen()) m_unixFileReceiverNet.write(dummyHeader);
         qDebug() << "@@@  startWriteToFile 17 ";
 
         if (m_unixFileReceiverOut.isOpen()) m_unixFileReceiverOut.write(dummyHeader);
         qDebug() << "@@@  startWriteToFile 18 ";
 
-    }
+
 }
 
 void AudioEngine::stopWriteToFile()
 {
+    qDebug() << "@@@stopWriteToFile" ;
     if (m_unixFileSenderIn.isOpen()) { writeWavHeader(m_unixFileSenderIn, m_unixSizeSenderIn); m_unixFileSenderIn.close(); }
     if (m_unixFileSenderNet.isOpen()) { writeWavHeader(m_unixFileSenderNet, m_unixSizeSenderNet); m_unixFileSenderNet.close(); }
     if (m_unixFileReceiverNet.isOpen()) { writeWavHeader(m_unixFileReceiverNet, m_unixSizeReceiverNet); m_unixFileReceiverNet.close(); }
     if (m_unixFileReceiverOut.isOpen()) { writeWavHeader(m_unixFileReceiverOut, m_unixSizeReceiverOut); m_unixFileReceiverOut.close(); }
-    m_unixCurrentRole = "none";
-    firstReceive = true;
-    firstSend = true;
+    firstWriteToFile = true;
     qDebug() << "@@@ [AudioEngine] Все активные аудиофайлы успешно сохранены.";
+    emit stopWritingSound();
 }
 
 void AudioEngine::writeWavHeader(QFile &file, int dataSize)
@@ -644,34 +694,33 @@ void AudioEngine::enableEchoTest(bool enable)
         }
     }
 }
-void AudioEngine::processAudioOutput()
+void AudioEngine::setMicLevel(int level)
 {
-    if (!m_audioOutputDevice || !m_audioOutputDevice->isOpen() || !m_audioSink) {
-        return;
+    if (level < 0) level = 0;
+    if (level > 100) level = 100;
+    m_micLevel = level;
+    saveLevels();
+    // Используем корректное имя переменной m_audioSource из вашего класса
+    if (m_audioSource) {
+        m_audioSource->setVolume(m_micLevel / 100.0);
     }
+    qDebug() << "@@@sound [AudioEngine] Установлен уровень микрофона:" << m_micLevel;
+}
 
-    const int frameSize = 640;
+void AudioEngine::setSpeakerLevel(int level)
+{
+    if (level < 0) level = 0;
+    if (level > 100) level = 100;
+    m_speakerLevel = level;
 
-    if (firstReceive) {
-        if (m_ringBuffer.size() < (frameSize * 4)) {
-            return;
-        }
-        firstReceive = false;
+    if (m_audioSink) {
+        m_audioSink->setVolume(m_speakerLevel / 100.0);
     }
+    saveLevels();
+    qDebug() << "@@@sound [AudioEngine] Установлен уровень динамиков:" << m_speakerLevel;
+}
 
-    if (m_ringBuffer.size() > (frameSize * 25)) {
-        m_ringBuffer.remove(0, m_ringBuffer.size() - (frameSize * 25));
-    }
-
-    bool bytesWritten = false;
-    while (m_ringBuffer.size() >= frameSize && m_audioSink->bytesFree() >= frameSize) {
-        QByteArray chunk = m_ringBuffer.left(frameSize);
-        m_ringBuffer.remove(0, frameSize);
-
-        m_audioOutputDevice->write(chunk);
-        bytesWritten = true;
-    }
-
-    // Запоминаем: если мы только что что-то сыграли, значит динамик активен
-    m_isOutputPlaying = bytesWritten;
+void AudioEngine::setWriteToFile(bool w) {
+    writeToFile = w;
+    firstWriteToFile = true;
 }

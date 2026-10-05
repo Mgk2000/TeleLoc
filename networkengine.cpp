@@ -15,7 +15,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QGuiApplication>
-
+bool developer = false;
 NetworkEngine * netEngine;
 NetworkEngine::NetworkEngine(QObject *parent)
     : QObject(parent), tcpClientSocket(nullptr) {
@@ -264,6 +264,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         // Вызываем AudioEngine в роли получателя
  //       if (audioEngine->writeToFile)
  //       audioEngine->startWriteToFile("receiver");
+        audioEngine->setWriteToFile(true);
     }
     else if (type == "stop_audio_recording") {
         qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Останавливаем запись Получателя.";
@@ -398,6 +399,7 @@ void NetworkEngine::sendTCP(const QString& command)
 }
 void NetworkEngine::stopAudioCall() {
     if (m_users.isEmpty()) return;
+    audioEngine->stopWriteToFile();
     UserInfo me = m_users.at(0);
     QJsonObject obj;
     obj["type"] = "stop_call";
@@ -408,7 +410,7 @@ void NetworkEngine::stopAudioCall() {
     if (targetIp.startsWith("::ffff:")) {
         targetIp.remove("::ffff:");
     }
-    qDebug() << "@@@incomingCall Stop Call ip=" << targetIp << "data=" << data;
+    qDebug() << "@@@stop Call ip=" << targetIp << "data=" << data;
     if (!targetIp.isEmpty() && tcpSocket) {
         tcpSocket->abort();
         tcpSocket->connectToHost(targetIp, PORT);
@@ -428,15 +430,21 @@ void NetworkEngine::stopAudioCall() {
     callInfo.netType = -1;
     emit callStopped();
 }
-void NetworkEngine::readConfig(bool checkLastCall) {
-    qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
-    qint64 dt = currMsec - lastReadConfigTime;
-    lastReadConfigTime = currMsec;
+QString configName()
+{
 #ifdef Q_OS_ANDROID
     QString fName = "/data/user_de/0/org.qtproject.example.appTeleLoc/files/teleloc.conf";
 #else
     QString fName = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
 #endif
+    return fName;
+}
+
+void NetworkEngine::readConfig(bool checkLastCall) {
+    qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
+    qint64 dt = currMsec - lastReadConfigTime;
+    lastReadConfigTime = currMsec;
+    QString fName = configName();
     QFile file(fName);
     if (!file.open(QIODevice::ReadOnly)) {
         return;
@@ -453,7 +461,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
    // qDebug() << "@@@ read config 2";
     QJsonObject rootObj = doc.object();
 
-    qDebug() << "@@@ read config 3";
+    //qDebug() << "@@@ read config 3" << rootObj;
     QJsonArray peersArray = rootObj["peers"].toArray();
     if (!peersArray.isEmpty())
     {
@@ -478,7 +486,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
         //qDebug() << "@@@ read config 3.6";
         }
     }
-    qDebug() << "@@@ read config 4" ;
+    //qDebug() << "@@@ read config 4" ;
     if (checkLastCall && rootObj.contains("lastCall"))
         {
         QJsonObject callObj = rootObj["lastCall"].toObject();
@@ -516,7 +524,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
         }
         else
         {
-            qDebug() << "@@@  lastCall too old";
+            //qDebug() << "@@@  lastCall too old";
         }
         //qDebug() << "@@@ read config 5";
         rootObj.remove("lastCall");
@@ -537,11 +545,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
 #ifndef Q_OS_ANDROID
 void NetworkEngine::saveConfig()
 {
-    QString fName = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
-    QFile file(fName);
-    file.open(QIODevice::WriteOnly);
-    QJsonDocument doc;
-    QJsonObject configObj;
+    QJsonObject configObj = readJsonConfig();
     QJsonArray peers;
     for (int i =0; i< m_users.count(); i++)
     {
@@ -555,9 +559,7 @@ void NetworkEngine::saveConfig()
         peers.append(peer);
     }
     configObj["peers"]= peers;
-    doc.setObject(configObj);
-    file.write(doc.toJson(QJsonDocument::Indented));
-    file.close();
+    writeJsonConfig(configObj);
 }
 #endif
 void NetworkEngine::saveName(const QString &name) {
@@ -584,21 +586,37 @@ QString NetworkEngine::getSavedName() {
     }
     return NEWUSER;
 }
-void NetworkEngine::savePeersToConfig() {
-    if (m_users.isEmpty()) return;
-    qDebug() << "@@@ 0000000000000000000000000000 savePeersToConfig 000000000000000000000000";
-    QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+QJsonObject readJsonConfig()
+{
     QJsonObject rootObj;
 
     // Сначала читаем текущее имя из файла, чтобы не потерять его
-    QFile readFile(path + "/teleloc.conf");
+    QFile readFile(configName());
     if (readFile.open(QIODevice::ReadOnly)) {
         QJsonDocument readDoc = QJsonDocument::fromJson(readFile.readAll());
         if (!readDoc.isNull() && readDoc.isObject()) {
             rootObj = readDoc.object();
         }
         readFile.close();
+        return rootObj;
     }
+    return QJsonObject();
+}
+
+void writeJsonConfig(const QJsonObject & obj)
+{
+    QFile writeFile(configName());
+    if (writeFile.open(QIODevice::WriteOnly)) {
+        QJsonDocument doc(obj);
+        writeFile.write(doc.toJson(QJsonDocument::Compact));
+        writeFile.close();
+    }
+
+}
+void NetworkEngine::savePeersToConfig() {
+    if (m_users.isEmpty()) return;
+    qDebug() << "@@@ 0000000000000000000000000000 savePeersToConfig 000000000000000000000000";
+    QJsonObject rootObj = readJsonConfig();
 
     // Сериализуем всех друзей из оперативной памяти в JSON-массив
     QJsonArray peersArray;
@@ -613,13 +631,7 @@ void NetworkEngine::savePeersToConfig() {
         peersArray.append(peerObj);
     }
     rootObj["peers"] = peersArray;
-
-    QFile writeFile(path + "/teleloc.conf");
-    if (writeFile.open(QIODevice::WriteOnly)) {
-        QJsonDocument doc(rootObj);
-        writeFile.write(doc.toJson(QJsonDocument::Compact));
-        writeFile.close();
-    }
+    writeJsonConfig(rootObj);
 }
 
 void NetworkEngine::incomingCall()
@@ -637,6 +649,14 @@ void NetworkEngine::incomingCall()
     deleteLastCall();
 #endif
     qDebug() << "@@@incomingCall exit ip=" << callInfo.ip ;
+    if (developer)
+    {
+        qDebug() << "@@@incomingCall auto accept";
+        acceptAudioCall(callInfo.name,callInfo.netType);
+        emit autoAcceptCall();
+        return;
+    }
+
 }
 
 void NetworkEngine::reject(const QString &ip)
@@ -835,7 +855,7 @@ void NetworkEngine::onReadyUdpRead() {
         QHostAddress senderHost;
         udpSocket->readDatagram(datagram.data(), datagram.size(), &senderHost);
         QString s (datagram);
-        if (!s.contains("discovery"))
+        if (!s.contains(m_users[0].name))
             qDebug() << "@@@ parse onReadyUdpRead@@@@@@@@onReadyUdpRead" << s;
         parseIncomingSyncData(datagram, senderHost.toString());
     }
@@ -950,8 +970,7 @@ void NetworkEngine::debugUsers(){
 #if 0
 QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
     QList<UserInfo> activeUsers;
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/teleloc.conf";
-    QFile file(configPath);
+    QFile file(configName());
     qDebug() << "@@@ " << "configpath=" << configPath;
     if (file.open(QIODevice::ReadOnly)) {
         QJsonDocument doc = QJsonDocument::fromJson(file.readAll());

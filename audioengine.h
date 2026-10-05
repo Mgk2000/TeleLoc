@@ -21,19 +21,26 @@ public:
     Q_INVOKABLE void startWriteToFile(const QString &role);
     Q_INVOKABLE void stopWriteToFile();
     Q_INVOKABLE void muteMicrophone(bool mute);
+    Q_INVOKABLE void setMicLevel(int level);
+    Q_INVOKABLE void setSpeakerLevel(int level);
+    Q_INVOKABLE int getMicLevel() {return m_micLevel;}
+    Q_INVOKABLE int getSpeakerLevel(){return m_speakerLevel;}
     QIODevice *m_audioOutputDevice;
     QByteArray m_ringBuffer, m_micBuffer;
-    void setWriteToFile(bool w) {writeToFile = w;}
+    void setWriteToFile(bool w);
     void toggleEchoTest()
     {
         enableEchoTest(!m_isEchoTestMode);
         qDebug() << "@@@echo="<< m_isEchoTestMode;
     }
+    bool writeToFile = false;
     void enableEchoTest(bool enable);
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
-
+    void initMicLevel(int level);
+    void initSpeakerLevel(int level);
+    void stopWritingSound();
 private slots:
     void onReadyReadUdp();
     void onTimer();
@@ -59,7 +66,7 @@ private:
     QFile m_unixFileReceiverOut;
     int   m_unixSizeReceiverOut;
 
-    QString m_unixCurrentRole; // "sender", "receiver" или "none"
+    //QString m_unixCurrentRole; // "sender", "receiver" или "none"
     bool m_unixIsMuted;
     NetworkEngine * netEngine;
     QTimer audioTimer;
@@ -67,9 +74,7 @@ private:
     int inAudioSize = 0, outAuioSize = 0;
     void setAndroidVoipMode(bool enable, int audioSessionId = 0);
     bool m_isTalking = false;
-    bool firstReceive = true;
-    bool firstSend = true;
-    bool writeToFile = false;
+    bool firstWriteToFile = true;
     bool m_isEchoTestMode = false;
     void *m_opusEncoder = nullptr;
     void *m_opusDecoder = nullptr;
@@ -81,8 +86,13 @@ private:
     float m_y1 = 0.0f;
     float m_y2 = 0.0f;
     bool m_isOutputPlaying = false;
+    float m_lpfS1 = 0.0f;
+    int m_micLevel;
+    int m_speakerLevel;
+    void saveLevels();
+    void readLevels();
 private slots:
-    void processAudioOutput();
+    //void processAudioOutput();
 
 };
 

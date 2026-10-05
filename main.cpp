@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
 #endif
 
     engine.rootContext()->setContextProperty("netEngine", &netEngine);
-    engine.rootContext()->setContextProperty("AudioEngine", netEngine.audioEngine);
+    engine.rootContext()->setContextProperty("audioEngine", netEngine.audioEngine);
     engine.rootContext()->setContextProperty("myUsersModel", netEngine.usersModel);
 
     const QUrl url(QStringLiteral("qrc:/qt/qml/TeleLoc/Main.qml"));
