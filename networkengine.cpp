@@ -215,6 +215,8 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
             callInfo.ip.remove("::ffff:");
 
         callInfo.name = name;
+        if (obj.contains("write"))
+            audioEngine->setWriteToFile(true);
         qDebug() << "@@@incomingCall from parse";
         incomingCall();
     }
@@ -367,7 +369,7 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
         tcpSocket->waitForBytesWritten(500);
     }
 
-    qDebug() << "$$$ before audioEngine->startRecording" << callInfo.ip;
+    qDebug() << "@@@incomingCall accept ip=" << callInfo.ip;
     bool android = m_users[0].android && isUserAndroid(targetPeerName);
     callInfo.useOpus = android;
 
@@ -386,13 +388,19 @@ void NetworkEngine::sendTCP(const QString& command)
     if (targetIp.startsWith("::ffff:")) {
         targetIp.remove("::ffff:");
     }
-    qDebug() << "@@@ Send Tcp ip=" << targetIp << "data=" << data;
+    qDebug() << "@@@sendtcp 1 ip=" << targetIp << "data=" << data;
     if (!targetIp.isEmpty() && tcpSocket) {
+        qDebug() << "@@@sendtcp 2 ip=" << targetIp << "data=" << data;
         tcpSocket->abort();
+        qDebug() << "@@@sendtcp 3 ip=" << targetIp << "data=" << data;
         tcpSocket->connectToHost(targetIp, PORT);
+        qDebug() << "@@@sendtcp 4 ip=" << targetIp << "data=" << data;
         if (tcpSocket->waitForConnected(500)) {
+            qDebug() << "@@@sendtcp 5 ip=" << targetIp << "data=" << data;
             tcpSocket->write(data);
+            qDebug() << "@@@sendtcp 6 ip=" << targetIp << "data=" << data;
             tcpSocket->waitForBytesWritten(500);
+            qDebug() << "@@@sendtcp 7 ip=" << targetIp << "data=" << data;
         }
     }
 
@@ -643,7 +651,7 @@ void NetworkEngine::incomingCall()
     emit setNetType(callInfo.netType);
     emit incomingCall(callInfo.name,callInfo.netType);
 #ifdef Q_OS_ANDROID
-    qDebug() << "@@@incomingCall from incomimCall before sendCommandToTeleLocService";
+    qDebug() << "@@@incomingCall from incomimCall developer=" << developer;
     sendCommandToTeleLocService(1,"");
 #else
     deleteLastCall();
@@ -651,10 +659,9 @@ void NetworkEngine::incomingCall()
     qDebug() << "@@@incomingCall exit ip=" << callInfo.ip ;
     if (developer)
     {
-        qDebug() << "@@@incomingCall auto accept";
-        acceptAudioCall(callInfo.name,callInfo.netType);
-        emit autoAcceptCall();
-        return;
+        QTimer::singleShot(5000, this, [this]() {
+            autoAcceptCall();
+        });
     }
 
 }
@@ -793,6 +800,8 @@ QByteArray NetworkEngine::getCallData(int netType)
     obj["name"] = me.name;
     obj["netType"] = netType;
     obj["ip"] = me.ip[netType];
+    if (audioEngine->writeToFile)
+        obj["write"] = 1;
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
     return data;
@@ -1050,6 +1059,7 @@ void NetworkEngine::masterStartRecording()
     // 1. Включаем запись у себя (мы — отправитель)
     audioEngine->setWriteToFile(true);
     // 2. Отправляем команду по TCP удалённой стороне на порт 28000
+    if (callInfo.state == CallInfo::speaking)
     sendTCP("start_audio_recording");
 }
 
@@ -1069,6 +1079,15 @@ bool NetworkEngine::isUserAndroid(const QString & name) const
         if (m_users[i].name == name)
             return m_users[i].android;
     return true;
+}
+
+void NetworkEngine::autoAcceptCall()
+{
+    qDebug() << "@@@incomingCall auto accept" << callInfo.name << callInfo.netType;
+    acceptAudioCall(callInfo.name,callInfo.netType);
+    //emit autoAcceptCall();
+    return;
+
 }
 
 //#include "networkengine.h"

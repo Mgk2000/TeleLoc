@@ -84,6 +84,7 @@ public:
         {usersModel = _model;}
     void incomingCall();
     bool isUserAndroid(const QString &name) const;
+    void autoAcceptCall();
 
 signals:
     void peerListChanged();
@@ -97,7 +98,7 @@ signals:
     void usersModelChanged();
     void setActiveNetType(int _netType);
     void setCallState(int st);
-    void autoAcceptCall();
+//    void autoAcceptCall();
 private slots:
     void onNewConnection();
     void onReadyTcpRead();

@@ -25,7 +25,7 @@ AudioEngine::AudioEngine(QObject *parent)
     , m_unixSizeSenderNet(0)
     , m_unixSizeReceiverNet(0)
     , m_unixSizeReceiverOut(0)
-//    , m_unixCurrentRole("none")
+    //    , m_unixCurrentRole("none")
     , m_unixIsMuted(false)
     , m_isTalking(false)
 {
@@ -59,7 +59,6 @@ void AudioEngine::startRecording(const QString &targetIp)
 
     // Первичный перевод Android в режим связи
     setAndroidVoipMode(true);
-
     if (m_audioSource) {
         qDebug() << "@@@startrecording 1";
         m_audioSource->stop();
