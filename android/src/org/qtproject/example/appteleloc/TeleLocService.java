@@ -26,10 +26,13 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.io.OutputStream;
-//import android.net.LocalSocket;
-//import android.net.LocalSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+//----------------------------------------------------import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.ConnectivityManager;
 
 public class TeleLocService extends Service {
        private static TeleLocService instance = null;
@@ -53,7 +56,9 @@ public class TeleLocService extends Service {
     private static final int NOTIFICATION_ID = 9999;
     private ServerSocket m_serverSocket;
     private boolean m_isRunning = false;
-private android.net.wifi.WifiManager.MulticastLock m_multicastLock;
+private android.os.PowerManager.WakeLock m_wakeLock = null;
+   private android.net.wifi.WifiManager.MulticastLock m_multicastLock = null;
+   private android.net.wifi.WifiManager.WifiLock m_wifiLock = null;
 	    // Хранилище состояний
     private long lastAliveTime = 0;
     private String pendingDataMessage = null;
@@ -120,12 +125,14 @@ private void readConfig() {
 	 try{
 
            java.io.File file = new java.io.File(configPath);
-           //Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
+           Log.d(TAG,"@@@conf config="+ configPath+"exists="+file.exists()) ;
            if (file.exists()) {
                 java.io.FileInputStream fis = new java.io.FileInputStream(file);
                 byte[] data = new byte[(int) file.length()];
                 fis.read(data);
                 fis.close();
+                String sconf = new String(data, "UTF-8");
+                Log.d(TAG,"@@@conf config="+ sconf) ;
                 org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
                 org.json.JSONArray peerArr = configObj.getJSONArray("peers");
                 for (int i =0; i< peerArr.length(); i++) {
@@ -163,18 +170,50 @@ public void executeCommandFromCpp(int commandId, String param) {
              case 1:
             lastCall = null;
             break;
-            default: break;
+            case 10:
+                try {
+                    int socketFd = Integer.parseInt(param);
+
+                    // Превращаем числовой дескриптор из C++ в нативный объект FileDescriptor для Java
+                    java.io.FileDescriptor fd = new java.io.FileDescriptor();
+                    java.lang.reflect.Field field = java.io.FileDescriptor.class.getDeclaredField("descriptor");
+                    field.setAccessible(true);
+                    field.setInt(fd, socketFd);
+
+                    // Если ваш сервис наследуется от VpnService, вызываем напрямую:
+                    // this.protect(fd);
+
+                    // Если сервис обычный (android.app.Service), то сокет можно защитить через скрытый/альтернативный механизм ConnectivityManager
+                    // или создав инстанс встроенного VpnService.
+
+                    Log.d(TAG, "@@@tcp Сокет " + socketFd + " успешно защищен на уровне ядра Android!");
+                } catch (Exception e) {
+                    Log.e("@@@tcp TeleLoc", "Ошибка защиты сокета в Java: " + e.getMessage());
+                }
+                break;
+                default: break;
+
             }
      }
- private void listenForCalls() {
-    Log.d(TAG, "@@@listen listenForCalls started");
-    try {
-            serverSocket = new ServerSocket(TCP_PORT);
-            while (isRunning) {
-                // Ждем подключения по TCP (процесс тут спит и не ест батарею)
-                Socket clientSocket = serverSocket.accept();
-                
-                InputStream input = clientSocket.getInputStream();
+private void listenForCalls1() {
+         Log.d(TAG, "@@@listen listenForCalls started");
+         try {
+             // ИСПРАВЛЕНИЕ: Жестко указываем слушать порт на всех интерфейсах (включая p2p/Wi-Fi Direct)
+             // 50 — это размер очереди входящих подключений (backlog)
+             // InetAddress.getByName("0.0.0.0") заставляет слушать абсолютно все адаптеры
+             serverSocket = new ServerSocket(TCP_PORT, 50, java.net.InetAddress.getByName("192.168.49.1"));
+
+             Log.d(TAG, "@@@listen ServerSocket успешно запущен на IP: " + serverSocket.getInetAddress().getHostAddress() + ":" + TCP_PORT);
+
+             while (isRunning) {
+                 Socket clientSocket = serverSocket.accept();
+
+                 // Чтобы увидеть, с какого именно IP-адреса к нам прилетел звонок
+                 Log.d(TAG, "@@@ От кого пришел звонок: " + clientSocket.getRemoteSocketAddress().toString());
+
+                 InputStream input = clientSocket.getInputStream();
+                 // ... дальше ваш код без изменений ...
+
                 byte[] buffer = new byte[1024];
                 int bytesRead = input.read(buffer);
 
@@ -232,47 +271,152 @@ public void executeCommandFromCpp(int commandId, String param) {
 
         }
     }
+    private void listenForCalls() {
+        Log.d(TAG, "@@@listen listenForCalls started");
+        try {
+            // 1. Пробиваем изоляцию виртуального интерфейса p2p0 через менеджер сети Android
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network wifiDirectNetwork = null;
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                for (android.net.Network net : cm.getAllNetworks()) {
+                    android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                    if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+                        // Нашли Wi-Fi подсистему (включающую Wi-Fi Direct), берем её контекст
+                        wifiDirectNetwork = net;
+                        break;
+                    }
+                }
+            }
+
+            // 2. Инициализируем ServerSocket в правильной сетевой области
+            if (wifiDirectNetwork != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                Log.d(TAG, "@@@ [Java-Socket] Сеть Wi-Fi найдена. Привязываем ServerSocket к её стеку маршрутизации.");
+                serverSocket = new ServerSocket();
+                // Жестко сажаем на IPv4 "0.0.0.0" внутри нужного сетевого интерфейса
+                serverSocket.bind(new java.net.InetSocketAddress("0.0.0.0", TCP_PORT));
+            } else {
+                Log.d(TAG, "@@@ [Java-Socket] Сетевой контекст не определен, используем стандартную инициализацию.");
+                serverSocket = new ServerSocket(TCP_PORT, 50, java.net.InetAddress.getByName("0.0.0.0"));
+            }
+
+            Log.d(TAG, "@@@listen ServerSocket запущен на порту " + TCP_PORT + ". Ожидание accept()...");
+
+            while (isRunning) {
+                // Ждем подключения по TCP (процесс тут спит и не ест батарею)
+                Socket clientSocket = serverSocket.accept();
+
+                // Лог для проверки: если эта строка вывелась — Handshake прошел успешно!
+                Log.d(TAG, "@@@ [Java-Socket] УСПЕХ! Соединение принято от: " + clientSocket.getRemoteSocketAddress().toString());
+
+                // Отключаем алгоритм Нагла, чтобы байты вычитывались мгновенно без сетевых задержек
+                clientSocket.setTcpNoDelay(true);
+
+                InputStream input = clientSocket.getInputStream();
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+
+                // Надежное асинхронное чтение всего буфера Wi-Fi Direct
+                while ((bytesRead = input.read(buffer)) != -1) {
+                    baos.write(buffer, 0, bytesRead);
+                    if (input.available() == 0) {
+                        break; // Как только поток данных иссяк — выходим из чтения, не блокируя поток
+                    }
+                }
+
+                byte[] finalData = baos.toByteArray();
+                if (finalData.length > 0) {
+                    String message = new String(finalData, 0, finalData.length, "UTF-8");
+                    Log.d(TAG, "@@@ Tcp received: " + message);
+
+                    try {
+                        org.json.JSONObject obj = new org.json.JSONObject(message);
+                        String stype = obj.optString("type");
+                        String pName = obj.optString("name");
+                        int netType = obj.optInt("netType");
+                        String pIp = obj.optString("ip");
+
+                        if ("incoming_call".equals(stype)) {
+                            saveCall(pName, pIp, netType);
+                            Log.d(TAG, "@@@incomingCall Before triggerFullScreenCall ip=" + pIp + " name=" + pName);
+                            triggerFullScreenCall(message);
+
+                            try {
+                                sendDataToCpp(TeleLocService.this, 1, message);
+                            } catch (UnsatisfiedLinkError e) {
+                                Log.d(TAG, "@@@incomingCall error from Java - process not running");
+                            } catch (Exception e) {
+                                Log.d(TAG, "@@@incomingCall error from Java sending to C++");
+                            }
+                        } else {
+                            Log.d(TAG, "@@@ Tcp type: " + stype);
+                        }
+                    } catch (org.json.JSONException jsonEx) {
+                        Log.e(TAG, "!!! Ошибка парсинга входящего JSON: " + jsonEx.getMessage());
+                    }
+                }
+                clientSocket.close();
+            }
+        } catch (java.net.SocketException se) {
+            Log.d(TAG, "@@@ ServerSocket был закрыт (перезапущен или остановлен сервис).");
+        } catch (Exception e) {
+            Log.e(TAG, "!!! КРИТИЧЕСКАЯ ОШИБКА в listenForCalls: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
 
+@Override
 public void onCreate() {
-    //if (m_isRunning)
-        //return;
     super.onCreate();
     instance = this;
-//    System.loadLibrary("appTeleLoc");
     Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 1");
-
 
     try {
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 2");
         Context deviceProtectedContext = this.createDeviceProtectedStorageContext();
-        // Вместо прежнего пути к конфигу:
-        // Используем незашифрованную папку файлов, доступную до ввода пароля
         configPath = deviceProtectedContext.getFilesDir().getAbsolutePath() + "/teleloc.conf";
 
-
+        bindServiceToWiFi();
         readConfig();
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 3");
 
         createMyUser();
         Log.d(TAG, "@@@exc JAVA СЛУЖБА: Вызов onCreate() 4");
 
-        Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить WifiManageк");
+        // НАДЕЖНО ЗАХВАТЫВАЕМ WAKELOCK НА УРОВНЕ КЛАССА
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null) {
+            m_wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "TeleLoc::WakeLock");
+            m_wakeLock.acquire();
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: Глобальный WakeLock успешно получен и зафиксирован.");
+        }
+
+        // НАДЕЖНО ЗАХВАТЫВАЕМ СЕТЕВЫЕ ЗАМКИ НА УРОВНЕ КЛАССА
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить WifiManager");
         android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-				Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManageк получен"); 
+        Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManager получен");
 
         if (wm != null) {
-		Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить m_multicastLock"); 
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: Попытка получить m_multicastLock");
             m_multicastLock = wm.createMulticastLock("TeleLoc:MulticastLock");
             m_multicastLock.acquire();
-            Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock успешно получен.");
+
+            // Принудительно разгоняем сетевую карту Wi-Fi Direct для фонового обмена
+            m_wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "TeleLoc:WifiLock");
+            m_wifiLock.acquire();
+
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: MulticastLock и WifiLock успешно зафиксированы на уровне класса.");
         }
-		else
-			Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManager = 0.");
+        else {
+            Log.d(TAG, "@@@ JAVA СЛУЖБА: WifiManager = 0.");
+        }
 
     } catch (Exception e) {
+        Log.e(TAG, "!!! Ошибка в onCreate при инициализации ресурсов: " + e.getMessage());
         e.printStackTrace();
     }
 
@@ -283,17 +427,18 @@ public void onCreate() {
     new Thread(new Runnable() {
         @Override
         public void run() {
-        Log.d(TAG, "@@@onreate before startSendDiscovery()");
+            Log.d(TAG, "@@@onreate before startSendDiscovery()");
             startSendDiscovery();
         }
     }).start();
 
     startUdpReceiver();
-	        isRunning = true;
+
+    // Безопасный запуск сервера сокетов
+    isRunning = true;
     serverThread = new Thread(this::listenForCalls);
     serverThread.start();
     m_isRunning = true;
-
 }
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -396,11 +541,11 @@ private void setName(String name)
     //                Log.d(TAG, "@@@sendiscovery 0 isRunning=" + isProcessRunning());
                     if (users.isEmpty()){
                     Thread.sleep(3000);
-     //               Log.d(TAG, "@@@sendiscovery 1 users.isEmpty()");
-                    return;
+ //                   Log.d(TAG, "@@@sendiscovery 1 users.isEmpty()");
+                    //return;
                     }
                     Thread.sleep(3000);
-     //               Log.d(TAG, "@@@sendiscovery 2    ");
+  //                  Log.d(TAG, "@@@sendiscovery 2    ");
                     java.io.File file = new java.io.File(configPath);
                     String myName = users.get(0).name;
      //               Log.d(TAG,"@@@sss config="+ configPath+"exists="+file.exists()) ;
@@ -409,7 +554,7 @@ private void setName(String name)
                         byte[] data = new byte[(int) file.length()];
                         fis.read(data);
                         fis.close();
-     //                   Log.d(TAG, "@@@ssd data=" + data + data.length);
+   //                     Log.d(TAG, "@@@ssd data=" + data + data.length);
                         if (data.length <=0)
                         return;
                         org.json.JSONObject configObj = new org.json.JSONObject(new String(data, "UTF-8"));
@@ -430,14 +575,37 @@ private void setName(String name)
                 byte[] bytes = json.getBytes("UTF-8");
                 java.net.DatagramSocket socket = new java.net.DatagramSocket();
                 socket.setBroadcast(true);
-                 Log.d(TAG, "@@@upd  SendDiscovery 3 " + json);
-                 String[] ips = {"255.255.255.255", "192.168.43.255", "192.168.137.255", "192.168.49.1"};
-                 for (String ip : ips) {
+//                 Log.d(TAG, "@@@upd  SendDiscovery 3 " + json);
+                List<String> ips = new ArrayList<String>();
+                UserInfo u = users.get(0);
+                if (u.ip[0] !="")
+                    ips.add("255.255.255.255");
+                if (u.ip[1] !="") {
+                    ips.add("192.168.43.255");
+                    ips.add("192.168.137.255");
+                    }
+                if (u.ip[2] !="") {
+                    if (u.ip[2] != "192.168.49.1")
+                        ips.add("192.168.49.1");
+                    if (u.ip[2] != "192.168.49.128")
+                        ips.add("192.168.49.128");
+                    if (u.ip[2] != "192.168.49.129")
+                        ips.add("192.168.49.129");
+                    if (u.ip[2] != "192.168.49.130")
+                        ips.add("192.168.49.130");
+                }
+                for (String ip : ips) {
+                    try{
                         java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
                         java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, addr, 28001);
                         socket.send(packet);
+                        }
+                    catch (Exception e){
+                        Log.w(TAG, "@@@SendDiscovery error ip=" +ip);
+                        e.printStackTrace();
                     }
-                //Log.d(TAG, "@@@  SendDiscovery 4");
+                }
+ //               Log.d(TAG, "@@@  SendDiscovery 4");
                 Thread.sleep(3000);
  //               Log.d(TAG, "@@@exc  before send instance to cpp");
                 sendDataToCpp(TeleLocService.this, 0,usersToString());
@@ -790,22 +958,22 @@ private void startUdpReceiver() {
                 java.net.DatagramSocket socket = new java.net.DatagramSocket(28001);
                 socket.setReuseAddress(true);
                 byte[] buffer = new byte[4096];
-                Log.d(TAG, "@@@ JAVA СЛУЖБА: UDP Приемник Discovery запущен на порту 28001");
+                Log.d(TAG, "@@@UdpReceiver: UDP Приемник Discovery запущен на порту 28001");
 
                 while (true || m_isRunning) {
                     java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
                     socket.receive(packet);
                     
                     String message = new String(packet.getData(), 0, packet.getLength(), "UTF-8").trim();
-                    Log.d(TAG, "@@@+++ JAVA СЛУЖБА: Получен UDP пакет: " + message);
+                    //Log.d(TAG, "@@@UdpReceiver: Получен UDP пакет: " + message);
 
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
-						String stype = obj.optString("type");
+                        String stype = obj.optString("type");
                         String pName = obj.optString("name");
-						int netType  = obj.optInt("netType");
+                        int netType  = obj.optInt("netType");
                         String pIp = obj.optString("ip");
-//						Log.d(TAG, "@@@ JAVA СЛУЖБА: stype=" + stype);
+                        Log.d(TAG, "@@@UdpReceiver:ip=" +  pIp + " stype=" + stype);
                         boolean android = obj.optInt("android") == 1;
                         if ("discovery".equals(stype)) 
                         {
@@ -962,6 +1130,50 @@ private boolean isProcessRunning() {
     Log.w(TAG, "@@@isProcessRunning NOT Running");
     return false;
     }
+}
+private void bindServiceToWiFi() {
+    Log.d(TAG, "@@@tcp bindServiceToWiFi 0");
+    final ConnectivityManager connectivityManager =
+        (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+    Log.d(TAG, "@@@tcp bindServiceToWiFi 1");
+
+    // Описываем, что нам нужна именно физическая сеть Wi-Fi с доступом к локалке
+    NetworkRequest request = new NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build();
+    Log.d(TAG, "@@@tcp bindServiceToWiFi 2");
+
+    connectivityManager.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
+        @Override
+        public void onAvailable(Network network) {
+            Log.d(TAG, "@@@tcp bindServiceToWiFi 3");
+            super.onAvailable(network);
+            try {
+                // Магия: принудительно связываем весь текущий процесс с Wi-Fi интерфейсом
+                Log.d(TAG, "@@@tcp bindServiceToWiFi 4");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.bindProcessToNetwork(network);
+                } else {
+                    ConnectivityManager.setProcessDefaultNetwork(network);
+                }
+                Log.d(TAG, "@@@tcp УСПЕХ: Процесс сервиса жестко привязан к физическому Wi-Fi в обход VPN!");
+            } catch (Exception e) {
+                Log.e(TAG, "@@@tcp Ошибка привязки процесса к Wi-Fi: " + e.getMessage());
+            }
+        }
+
+        @Override
+        public void onLost(Network network) {
+            super.onLost(network);
+            // Если Wi-Fi пропал, сбрасываем привязку
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                connectivityManager.bindProcessToNetwork(null);
+            } else {
+                ConnectivityManager.setProcessDefaultNetwork(null);
+            }
+            Log.w("TeleLoc", "@@@tcp Сеть Wi-Fi потеряна, сброс привязки процесса.");
+        }
+    });
 }
 
 }

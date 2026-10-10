@@ -266,7 +266,7 @@ Popup {
                                 netEngine.acceptAudioCall(callScreenPopup.callerName, callScreenPopup.callNetType);
                                 console.log("$$$ incoming accept 3");
                             } else {
-                                netEngine.startAudioCall(callScreenPopup.callerName, 0 | 0)
+                                netEngine.startAudioCall(callScreenPopup.callerName, callScreenPopup.callNetType)
                             }
                         }
                         else if (handle.x < midX - threshold) {

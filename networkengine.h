@@ -138,6 +138,7 @@ private:
     void unixSendAlivePing();
     bool firstAlive = true;
     void sendCommandToTeleLocService(int commandId, const QString &payload);
+    void bindCppProcessToWiFi();
 #else
     void processDiscovery(const QString & name, const QJsonObject & obj);
     void saveConfig();
@@ -155,6 +156,8 @@ private:
     void setNetType(int _netType);
     void updateUsersList();
     void deleteLastCall();
+    bool bindSocketToWiFi1(QTcpSocket *socket, int netType);
+    bool bindSocketToWiFi(QTcpSocket *socket, int netType);
 };
 
 class UsersModel : public QAbstractListModel

@@ -87,6 +87,7 @@ NetworkEngine::NetworkEngine(QObject *parent)
     });
 
 */
+    bindCppProcessToWiFi();
 #endif
     QTimer *updateUsersTimer = new QTimer(this);
     connect(updateUsersTimer, &QTimer::timeout, this, &NetworkEngine::updateUsersList);
@@ -103,13 +104,7 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
     if (m_users.isEmpty()) return;
     QByteArray data = getCallData(netType);
     qDebug() << "@@@@@@@@@@@@@NetworkEngine::sendCall to" << name;
-    //   qDebug() << "callip=" << callIp << udpSocket << QHostAddress(callIp);
-    //    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
-    //    udpSocket->writeDatagram(data, QHostAddress(callIp), PORT);
-    //    udpSocket->reset();
-    //    qint64 nb = udpSocket->writeDatagram(data, QHostAddress("255.255.255.255"), PORT);
-    //udpSocket->flush();
-    //    qDebug() << "@@@ Send" << nb << "bytes";
+
     m_ringbackTone->play();
     if (m_users.isEmpty()) return;
     QTcpSocket *socket = new QTcpSocket();
@@ -122,6 +117,8 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
         }
     qDebug() << "@@@call Calling" << name << targetIp;
     int port = 28501;
+    bindSocketToWiFi(socket, callInfo.netType);
+
     QObject::connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
     socket->connectToHost(targetIp, port);
 
@@ -132,9 +129,9 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
         socket->write(data);
         socket->flush();
         socket->disconnectFromHost();
-        qDebug() << "@@@ Send call by TCP to" << name;
+        qWarning() << "@@@call Send call by TCP to" << name;
     } else {
-        qDebug() << "Ошибка вызова по TCP:" << socket->errorString();
+        qDebug() << "@@@call Ошибка вызова по TCP:" << socket->errorString();
         socket->deleteLater();
     }
 }
@@ -279,7 +276,10 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() для:" << name;
     setCallingState(CallInfo::outCalling);
     if (name != "Анфиса")
+    {
         sendCallByTcp(name, netType);
+        //return;
+    }
 
     QString targetIp = "";
     //qDebug() << "startAudioCall()" << "@@@ СЕТЬ C++: Вызов () 1 для:" << targetPeerName;
@@ -313,7 +313,8 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
 
     tcpSocket->abort();
    // bool connected = false;
-#ifdef Q_OS_ANDROID
+#ifdef Q_OS_ANDROID1
+    bindSocketToWiFi(tcpSocket, netType);
     tcpSocket->connectToHost(targetIp, 28500);
 /*    connect (tcpSocket,&QTcpSocket::connected, this, [this, data, connected](){
         tcpSocket->write(data);
@@ -322,7 +323,6 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
 
 
     });*/
-#endif
 
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 4 для:" << name;
     //if (!connected)
@@ -344,6 +344,7 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
             return;
         }
     }
+#endif
     m_ringbackTone->play();
 }
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) {
@@ -363,6 +364,7 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
 
 
     tcpSocket->abort();
+    bindSocketToWiFi(tcpSocket, callInfo.netType);
     tcpSocket->connectToHost(callInfo.ip, PORT);
     if (tcpSocket->waitForConnected(1200)) {
         tcpSocket->write(data);
@@ -393,6 +395,7 @@ void NetworkEngine::sendTCP(const QString& command)
         qDebug() << "@@@sendtcp 2 ip=" << targetIp << "data=" << data;
         tcpSocket->abort();
         qDebug() << "@@@sendtcp 3 ip=" << targetIp << "data=" << data;
+        bindSocketToWiFi(tcpSocket, callInfo.netType);
         tcpSocket->connectToHost(targetIp, PORT);
         qDebug() << "@@@sendtcp 4 ip=" << targetIp << "data=" << data;
         if (tcpSocket->waitForConnected(500)) {
@@ -586,10 +589,10 @@ void NetworkEngine::saveName(const QString &name) {
 }
 
 QString NetworkEngine::getSavedName() {
-    qDebug() << "@@@getSavedName() 1 ";
+//    qDebug() << "@@@getSavedName() 1 ";
 //    debugUsers();
     if (!m_users.isEmpty()) {
-        qDebug() << "@@@getSavedName() 2 ";
+//        qDebug() << "@@@getSavedName() 2 ";
         return m_users[0].name;
     }
     return NEWUSER;
@@ -1191,4 +1194,112 @@ void NetworkEngine::updateInterfaces() {
     m_users[0].name = getSavedName();
 }
 
+#endif
+bool NetworkEngine::bindSocketToWiFi1(QTcpSocket* socket, int netType)
+{
+    // Защита от выхода за границы массива, если netType некорректен
+    int idx = (netType >= 0 && netType < 2) ? netType : 0;
+
+    // Получаем ваш локальный IP-адрес на даче (например, "192.168.1.34")
+    QString myLocalIp = m_users[0].ip[idx];
+
+    if (myLocalIp.isEmpty()) {
+        qDebug() << "!!! [VPN-Bypass] Ошибка: Мой локальный IP-адрес пуст!";
+        return false;
+    }
+
+    // abort() сбрасывает сокет в исходное состояние UnconnectedState
+    socket->abort();
+
+    // Принудительно сажаем сокет на наш Wi-Fi IP. 0 означает "выбрать любой свободный порт для отправки"
+    bool bound = socket->bind(QHostAddress(myLocalIp), 0);
+
+    if (bound) {
+        qDebug() << "@@@ [VPN-Bypass] Сокет успешно привязан к локальному Wi-Fi интерфейсу:" << myLocalIp;
+    } else {
+        qDebug() << "@@@ [VPN-Bypass] Ошибка привязки сокета к IP:" << myLocalIp << "Ошибка:" << socket->errorString();
+    }
+
+    return bound;
+}
+bool NetworkEngine::bindSocketToWiFi(QTcpSocket* socket, int netType)
+{
+    return true;
+    socket->abort(); // Сбрасываем сокет в исходное состояние
+
+    // Форсируем создание системного сокета внутри ОС, чтобы получить его дескриптор
+    // Для этого временно переводим сокет в режим привязки к Any
+     int idx = (netType >= 0 && netType < 3) ? netType : 0;
+    QString myLocalIp = m_users[0].ip[idx];
+
+    socket->abort();
+    bool bound = socket->bind(QHostAddress(myLocalIp), 0);
+
+    qintptr socketFd = socket->socketDescriptor();
+    if (socketFd != -1) {
+        qDebug() << "@@@ [VPN-Bypass] Передаем дескриптор сокета" << socketFd << "в Java для защиты.";
+
+        // Отправляем команду в Java-службу.
+        // Допустим, команда ID = 10 — это команда "защитить сокет"
+        sendCommandToTeleLocService(10, QString::number(socketFd));
+
+        return true;
+    }
+
+    qWarning() << "!!! [VPN-Bypass] Не удалось получить дескриптор сокета";
+    return false;
+}
+#ifdef Q_OS_ANDROID
+void NetworkEngine::bindCppProcessToWiFi() {
+    qDebug() << "@@@ [C++] Запуск принудительного обхода VPN для C++ процесса...";
+
+    // 1. Получаем ConnectivityManager
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject connManager = context.callObjectMethod(
+        "getSystemService",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+        QJniObject::fromString("connectivity").object()
+        );
+
+    if (!connManager.isValid()) {
+        qWarning() << "!!! [C++] Не удалось получить ConnectivityManager";
+        return;
+    }
+
+    // 2. Получаем список всех активных сетей в системе
+    QJniObject networks = connManager.callObjectMethod("getAllNetworks", "()[Landroid/net/Network;");
+    if (!networks.isValid()) return;
+
+    QJniEnvironment env;
+    jobjectArray netArray = static_cast<jobjectArray>(networks.object());
+    jsize length = env->GetArrayLength(netArray);
+
+    for (jsize i = 0; i < length; ++i) {
+        jobject netObj = env->GetObjectArrayElement(netArray, i);
+        QJniObject network(netObj);
+
+        // 3. Проверяем возможности каждой сети (нам нужен TRANSPORT_WIFI = 1)
+        QJniObject caps = connManager.callObjectMethod(
+            "getNetworkCapabilities",
+            "(Landroid/net/Network;)Landroid/net/NetworkCapabilities;",
+            network.object()
+            );
+
+        if (caps.isValid() && caps.callMethod<jboolean>("hasTransport", "(I)Z", 1 /* TRANSPORT_WIFI */)) {
+            // 4. Ура, нашли Wi-Fi сеть! Привязываем к ней весь C++ процесс
+            jboolean success = connManager.callMethod<jboolean>(
+                "bindProcessToNetwork",
+                "(Landroid/net/Network;)Z",
+                network.object()
+                );
+
+            if (success) {
+                qDebug() << "@@@ [C++] УСПЕХ! Весь C++ процесс успешно переключен на физический Wi-Fi в обход VPN.";
+            } else {
+                qWarning() << "!!! [C++] Попытка bindProcessToNetwork вернула false.";
+            }
+            break;
+        }
+    }
+}
 #endif
