@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Имя вашего приложения (замените на своё, если нужно) -->
+    <string name="app_name">appTeleLoc</string>
+    
+    <!-- Заглушка, которую мы указали в манифесте -->
+    <string name="null_attribution_label">Работа с сетью и окружением</string>
+    <!-- Описание для тега атрибуции аудио -->
+    <string name="audio_playback_attribution">Воспроизведение аудиопотока</string>
+</resources>
