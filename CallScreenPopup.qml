@@ -274,8 +274,12 @@ Popup {
 
                             if (callScreenPopup.isIncoming) {
                                 netEngine.stopAudioCall();
+                                netEngine.masterStopRecording()
+
                             } else {
                                netEngine.stopAudioCall();
+                                netEngine.masterStopRecording()
+
                             }
                             callScreenPopup.close();
                         }

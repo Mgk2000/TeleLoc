@@ -1,0 +1,127 @@
+<?xml version="1.0"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://android.com" 
+    package="org.qtproject.example.appTeleLoc"
+	
+    android:installLocation="auto"
+    android:versionCode="-- %%INSERT_VERSION_CODE%% --"
+    android:versionName="-- %%INSERT_VERSION_NAME%% --">
+    <!-- %%INSERT_PERMISSIONS -->
+    <!-- Базовые и сетевые разрешения -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+	<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+    <!-- Разрешения для надежной фоновой работы в Android 14+ -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<!-- Для Android 14+ (API 34) -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" /> <!-- НОВОЕ: Перевод службы на аудио-звонки -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />             <!-- НОВОЕ: Пробитие блокировок запуска окон -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />       <!-- НОВОЕ: Автозапуск после перезагрузки -->
+    
+    <!-- Приоритеты экрана -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+	<uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+	<uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+	<uses-permission android:name="android.permission.WRITE_SETTINGS" />
+ 
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+	
+	    <!-- Разрешение для работы службы в режиме аудиоплеера/рации -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Разрешения для использования системного будильника на Android 14+ -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+	<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+<!-- Разрешение для поиска устройств по Wi-Fi без геолокации (Android 13+) -->
+<uses-permission 
+    android:name="android.permission.NEARBY_WIFI_DEVICES" 
+    android:usesPermissionFlags="neverForLocation" />
+    <attribution android:tag="null" android:label="@string/null_attribution_label" /> 
+
+    <!-- %%INSERT_FEATURES -->
+    <supports-screens
+        android:anyDensity="true"
+        android:largeScreens="true"
+        android:normalScreens="true"
+        android:smallScreens="true" />
+
+    <attribution 
+        android:tag="audioPlayback" 
+        android:label="@string/audio_playback_attribution" />
+    <application
+        android:name="org.qtproject.qt.android.bindings.QtApplication"
+        android:hardwareAccelerated="true"
+        android:label="-- %%INSERT_APP_NAME%% --"
+		android:directBootAware="true"
+        android:requestLegacyExternalStorage="true"
+        android:allowBackup="true"
+		android:icon="@mipmap/icon"
+        android:fullBackupOnly="false">
+        <activity
+            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+            android:launchMode="singleTop"
+            android:screenOrientation="unspecified"
+			android:showWhenLocked="true"
+            android:turnScreenOn="true"
+			android:directBootAware="true"
+			android:exported="true">
+			
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+          <meta-data
+                android:name="android.app.lib_name"
+                android:value="-- %%INSERT_APP_LIB_NAME%% --" />
+
+          <meta-data
+                android:name="android.app.arguments"
+                android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.qtprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/qtprovider_paths"/>
+        </provider>
+        <!-- Изменено foregroundServiceType на phoneCall|mediaPlayback для легализации рации -->
+<service android:name="org.qtproject.example.appTeleLoc.TeleLocService"
+         android:foregroundServiceType="phoneCall|mediaPlayback"	
+         android:stopWithTask="false"
+         android:directBootAware="true"
+         android:exported="false">
+    <meta-data android:name="android.app.lib_name" android:value="appTeleLoc" />
+    <meta-data android:name="android.app.background_running" android:value="true" />
+</service>
+        <!-- Автономный системный приёмник, караулящий импульсы подъёма из глубокого сна -->
+<receiver android:name=".TeleLocWakeReceiver" 
+          android:enabled="true" 
+          android:exported="true"
+          android:directBootAware="true"> <!-- Магия тут -->
+    <intent-filter>
+        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+    </intent-filter>
+</receiver>
+
+    </application>
+
+</manifest>

@@ -77,6 +77,7 @@ qt_add_qml_module(appTeleLoc
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocService.java
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocWakeReceiver.java
         RESOURCES qtquickcontrols2.conf
+        RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocActivity.java
 )
 
 # Прописываем только ПУБЛИЧНЫЕ заголовочные файлы Opus
