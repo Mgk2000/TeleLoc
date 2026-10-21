@@ -198,7 +198,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
 #ifndef Q_OS_ANDROID1
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
-//    qDebug() << "@@@ parseIncomingSyncData ndata=" << doc << "-----------------------------------------";
+    qDebug() << "@@@ parseIncomingSyncData ndata=" << doc ;
     if (doc.isNull()) return;
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
@@ -463,7 +463,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
     qint64 dt = currMsec - lastReadConfigTime;
     lastReadConfigTime = currMsec;
     QString fName = configName();
-    qDebug() << "@@@configpath CPP=" << configName();
+    //qDebug() << "@@@configpath CPP=" << configName();
     QFile file(fName);
     if (!file.open(QIODevice::ReadOnly) && m_users.isEmpty()) {
         UserInfo u;
@@ -1058,7 +1058,7 @@ void NetworkEngine::setNetType(int _netType)
 void NetworkEngine::updateUsersList()
 {
     readConfig(false);
-    qDebug()<< "@@@updateUsersList";
+    //qDebug()<< "@@@updateUsersList";
     //usersModel->updateAllUsers(m_users);
     usersModel->setUsers(m_users);
 }
@@ -1123,7 +1123,7 @@ Java_org_qtproject_example_appTeleLoc_TeleLocService_sendDataToCpp(
 
     QString data = QJniObject(jdata).toString();
     int id = eventId;
-    qDebug() << "@@@exc [C++] ДАННЫЕ ИЗ JAVA СЛУЖБЫ ПОЛУЧЕНЫ." << eventId << data;
+    //qDebug() << "@@@exc [C++] ДАННЫЕ ИЗ JAVA СЛУЖБЫ ПОЛУЧЕНЫ." << eventId << data;
     switch(id)
     {
     case 0:

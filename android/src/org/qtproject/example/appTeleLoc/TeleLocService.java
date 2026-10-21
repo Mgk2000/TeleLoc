@@ -71,8 +71,8 @@ public class TeleLocService extends android.app.Service {
     public void saveConfig(org.json.JSONObject obj) {
         try {
             java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
-            Log.d(TAG, "@@@Configpath JAVA=" + configPath);
-            Log.d(TAG, "@@@saveConfig " + obj.toString());
+          //  Log.d(TAG, "@@@Configpath JAVA=" + configPath);
+          //  Log.d(TAG, "@@@saveConfig " + obj.toString());
             fos.write(obj.toString().getBytes("UTF-8"));
             fos.close();
         } catch (Exception e) { Log.e(TAG, "saveConfig error: " + e.getMessage()); }
@@ -248,6 +248,7 @@ public class TeleLocService extends android.app.Service {
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
                         if ("incoming_call".equals(obj.optString("type"))) {
+                            Log.w(TAG, "@@@listenforcalls incoming_call" + message + isCppContextAlive());
                             saveCall(obj.optString("name"), obj.optString("ip"), obj.optInt("netType"));
                             triggerFullScreenCall(message);
                             sendToCpp(1,message);
@@ -287,18 +288,22 @@ public class TeleLocService extends android.app.Service {
 
                     List<String> ips = new ArrayList<>();
                     UserInfo u = users.get(0);
-                    if (u.ip != null && u.ip.length > 0 && !u.ip[0].isEmpty()) ips.add("255.255.255.255");
-                    if (u.ip != null && u.ip.length > 1 && !u.ip[1].isEmpty()) {
+                    if (u.ip[0] !="")
+                        ips.add("255.255.255.255");
+                    if (u.ip[1] !="") {
                         ips.add("192.168.43.255");
                         ips.add("192.168.137.255");
+                        }
+                    if (u.ip[2] !="") {
+                        if (u.ip[2] != "192.168.49.1")
+                            ips.add("192.168.49.1");
+                        if (u.ip[2] != "192.168.49.128")
+                            ips.add("192.168.49.128");
+                        if (u.ip[2] != "192.168.49.129")
+                            ips.add("192.168.49.129");
+                        if (u.ip[2] != "192.168.49.130")
+                            ips.add("192.168.49.130");
                     }
-                    if (u.ip != null && u.ip.length > 2 && !u.ip[2].isEmpty()) {
-                        if (!u.ip[2].equals("192.168.49.1")) ips.add("192.168.49.1");
-                        if (!u.ip[2].equals("192.168.49.128")) ips.add("192.168.49.128");
-                        if (!u.ip[2].equals("192.168.49.129")) ips.add("192.168.49.129");
-                        if (!u.ip[2].equals("192.168.49.130")) ips.add("192.168.49.130");
-                    }
-
                     for (String ip : ips) {
                         java.net.DatagramPacket packet = new java.net.DatagramPacket(bytes, bytes.length, java.net.InetAddress.getByName(ip), 28001);
                         socket.send(packet);
@@ -574,23 +579,15 @@ private void createMyUser() {
 }
 private boolean isCppContextAlive() {
     try {
-        // Запрашиваем встроенный системный инстанс Activity у загрузчика Qt
-        android.app.Activity activity = (android.app.Activity) Class.forName("org.qtproject.qt.android.QtNative")
-            .getMethod("activity")
-            .invoke(null);
-
-        // Если окно существует, не уничтожено и не находится в процессе закрытия
-        if (activity != null && !activity.isFinishing()) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                return !activity.isDestroyed();
-            }
-            return true;
-        }
-    } catch (Exception e) {
-        // Если класс QtNative не найден или выдал ошибку — значит C++ гарантированно мертв
+        // Делаем легкий холостой вызов JNI (eventId = 0).
+        // Если Qt и C++ живы в памяти — проверка мгновенно пройдет без ошибок!
+        sendDataToCpp(TeleLocService.this, 4, "*" );
+        return true;
+    } catch (UnsatisfiedLinkError | Exception e) {
+        // Если приложение смахнуто — мост разрушен.
+        // Java бесшумно перехватит ошибку и выдаст честный false!
         return false;
     }
-    return false;
 }
 void sendToCpp(int num, String message) {
 

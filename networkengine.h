@@ -185,8 +185,8 @@ public:
 
     // Метод для заполнения модели вашими данными
     void setUsers(const QList<UserInfo> &users) {
-        for (int i =0; i< users.count(); i++)
-            qDebug() << "@@@setUsers " << i << users[i].name;
+    //    for (int i =0; i< users.count(); i++)
+    //        qDebug() << "@@@setUsers " << i << users[i].name;
         beginResetModel();
         m_users = users.mid(1, 1000);
         endResetModel();
