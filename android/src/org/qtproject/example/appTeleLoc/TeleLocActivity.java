@@ -14,6 +14,10 @@ public class TeleLocActivity extends QtActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Log.d(TAG, "@@@ [Java Activity] Главное окно запущенно. Стартуем службу связи...");
+        // ЖЕЛЕЗНЫЙ ЗАПРЕТ: Заставляем окно Android всегда держать экран включенным!
+                // Этот флаг намертво блокирует датчик приближения (уха) и не даёт экрану тухнуть,
+                // а звуку — отключаться или затихать во время разговора.
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         try {
             Context appContext = getApplicationContext();

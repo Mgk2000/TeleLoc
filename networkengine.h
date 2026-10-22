@@ -63,7 +63,8 @@ public:
     Q_INVOKABLE void saveName(const QString &name);
     Q_INVOKABLE QStringList getUsers(int netType);
     Q_INVOKABLE void debugUsers();
-    Q_INVOKABLE void setDeveloper (bool d) {developer = d;}
+    Q_INVOKABLE void setDeveloper (bool d);
+    Q_INVOKABLE bool getDeveloper () {return developer;}
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
     //QList<UserInfo> loadPeersFromConfig();
@@ -72,6 +73,7 @@ public:
     void pressCallButon(int _netType);
     Q_INVOKABLE bool activeNetType();
     Q_INVOKABLE bool isCallIdle () const {return callInfo.state == CallInfo::idle;}
+    Q_INVOKABLE void saveSettings();
     Q_INVOKABLE bool isCallCalling () const
         {return callInfo.state == CallInfo::inCalling ||
                  callInfo.state == CallInfo::outCalling;}

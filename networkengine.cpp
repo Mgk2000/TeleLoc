@@ -486,7 +486,7 @@ void NetworkEngine::readConfig(bool checkLastCall) {
     }
    // qDebug() << "@@@ read config 2";
     QJsonObject rootObj = doc.object();
-
+    developer = (bool) rootObj["developer"].toInt();
     //qDebug() << "@@@ read config 3" << rootObj;
     QJsonArray peersArray = rootObj["peers"].toArray();
     if (!peersArray.isEmpty())
@@ -996,6 +996,11 @@ void NetworkEngine::debugUsers(){
     updateUsersList();
     //audioEngine->toggleEchoTest();
 }
+
+void NetworkEngine::setDeveloper(bool d)
+{
+    developer = d;
+}
 #if 0
 QList<UserInfo> NetworkEngine::loadPeersFromConfig() {
     QList<UserInfo> activeUsers;
@@ -1072,6 +1077,13 @@ void NetworkEngine::deleteLastCall()
 bool NetworkEngine::activeNetType()
 {
     return callInfo.netType;
+}
+
+void NetworkEngine::saveSettings()
+{
+    QJsonObject conf = readJsonConfig();
+    conf["developer"] = (int) developer;
+    writeJsonConfig(conf);
 }
 void NetworkEngine::masterStartRecording()
 {

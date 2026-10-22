@@ -18,7 +18,7 @@ ApplicationWindow {
     property string savedName: "Полосарь"
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
-    property bool developer : true
+    property bool developer : netEngine.getDeveloper()
     property int micVolume: 0
     property string callingColor: "#008800"
      property bool chatVisible: false
@@ -981,6 +981,7 @@ ApplicationWindow {
                 onClicked: {
                     if (settingsNameInput.text.trim() !== "") {
                         netEngine.saveName(settingsNameInput.text)
+                        netEngine.saveSettings()
                     }
                     settingsDialog.close()
                 }
