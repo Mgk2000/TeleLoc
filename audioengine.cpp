@@ -40,6 +40,8 @@ AudioEngine::AudioEngine(QObject *parent)
 
     // 3. Запускаем поток обработки звука
     m_workerThread.start(QThread::TimeCriticalPriority); // Высокий приоритет для аудио
+    speakerTimer.setInterval(1000);
+    connect(&speakerTimer, SIGNAL (timeout()), this, SLOT(onSpeakerTick()));
 }
 
 AudioEngine::~AudioEngine()
@@ -58,6 +60,8 @@ void AudioEngine::startRecording(const QString &targetIp)
     m_worker->setSpeakerVolume(m_speakerLevel);
     m_worker->setWriteToFile(m_writeToFile);
     m_worker->setEchoTest(m_isEchoTestMode);
+    m_worker->wasSound = false;
+    speakerTimer.start();
 
     // Безопасно инициализируем и запускаем аудиосистемы внутри контекста QThread
     QMetaObject::invokeMethod(m_worker, [this, targetIp]() {
@@ -70,6 +74,7 @@ void AudioEngine::stop()
 {
     qDebug() << "@@@ [Controller] Requesting audio stop";
     QMetaObject::invokeMethod(m_worker, &AudioWorker::stopAudio, Qt::QueuedConnection);
+    speakerTimer.stop();
 }
 
 void AudioEngine::startWriteToFile()
@@ -132,6 +137,16 @@ void AudioEngine::saveLevels() {}
 void AudioEngine::readLevels() {
     emit initMicLevel(m_micLevel);
     emit initSpeakerLevel(m_speakerLevel);
+}
+
+void AudioEngine::onSpeakerTick()
+{
+    qDebug() << "@@@audio data=" << m_worker->speakerDataCount;
+    if (m_worker-> wasSound && !m_worker->speakerDataCount) {
+        this->stop();
+        netEngine->closeCallDialog();
+    }
+    m_worker->speakerDataCount = 0;
 }
 #include "audioengine.h"
 #include <QDebug>
@@ -207,6 +222,7 @@ void AudioWorker::stopAudio()
     }
 
     // Очищаем внутренние буферы
+    if (false)
     {
         QMutexLocker locker(&m_bufferMutex);
         m_jitterBuffer.clear();
@@ -234,20 +250,17 @@ void AudioWorker::setAndroidVoipMode(bool enable, int audioSessionId)
         "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
     if (!audioManager.isValid()) return;
 
-    // Режим связи: 3 = MODE_IN_COMMUNICATION, 0 = MODE_NORMAL
     int mode = enable ? 3 : 0;
     audioManager.callMethod<void>("setMode", "(I)V", mode);
 
     if (enable) {
-        // Заставляем систему пустить звук через разговорный динамик/громкую связь правильно
-        audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", isTablet);
+        // Жестко принуждаем Android вещать звук через громкий СПИКЕРФОН, игнорируя датчик уха
+        audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
 
-        // 1. Проверяем доступность системного аппаратного AEC на Poco / Samsung
         jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
             "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
         qDebug() << "@@@ [JNI] Hardware AcousticEchoCanceler available:" << aecAvailable;
 
-        // 2. Насильно цепляем AEC к Audio Track ID, сгенерированному внутри Qt Multimedia
         if (aecAvailable && audioSessionId > 0) {
             QJniObject aecObject = QJniObject::callStaticObjectMethod(
                 "android/media/audiofx/AcousticEchoCanceler",
@@ -259,8 +272,6 @@ void AudioWorker::setAndroidVoipMode(bool enable, int audioSessionId)
             if (aecObject.isValid()) {
                 jint result = aecObject.callMethod<jint>("setEnabled", "(Z)I", true);
                 qDebug() << "@@@ [JNI] Hardware AEC binding result:" << (result == 0 ? "SUCCESS" : "ERROR");
-            } else {
-                qDebug() << "@@@ [JNI] Failed to instantiate AcousticEchoCanceler for session" << audioSessionId;
             }
         }
     }
@@ -282,27 +293,21 @@ void AudioWorker::onReadyReadUdp()
 
         compressedChunk.resize(static_cast<int>(m_udpReceiver->pendingDatagramSize()));
         int dataSize = compressedChunk.size();
+        speakerDataCount++;
+        wasSound = true;
 
         m_udpReceiver->readDatagram(compressedChunk.data(), dataSize, &senderAddress, &senderPort);
         if (compressedChunk.isEmpty()) continue;
 
-        // Эхо-тест режим
         if (m_isEchoTestMode && m_udpSender) {
             m_udpSender->writeDatagram(compressedChunk, senderAddress, 28002);
             continue;
         }
-#if 0
-        // Запись отладочного файла: Содержимое сети ДО декодирования (технически храним Opus)
-        if (m_writeToFile && m_unixFileReceiverNet.isOpen()) {
-            m_unixFileReceiverNet.write(compressedChunk);
-            m_unixSizeReceiverNet += compressedChunk.size();
-        }
-#endif
-        // Декодируем Opus в PCM (16000 Гц или 48000 Гц в зависимости от инициализации)
-        QByteArray pcmChunk;
-        int frameSize = 320; // 20мс для 16кГц
 
-        pcmChunk.resize(frameSize * sizeof(short));
+        QByteArray pcmChunk;
+        // Даем Opus декодеру максимальный запас по памяти (960 семплов), чтобы избежать обрезки данных
+        int maxFrameSize = 960;
+        pcmChunk.resize(maxFrameSize * sizeof(short));
 
         if (m_opusDecoder) {
             int decodedSamples = opus_decode(
@@ -310,26 +315,25 @@ void AudioWorker::onReadyReadUdp()
                 reinterpret_cast<const unsigned char*>(compressedChunk.constData()),
                 compressedChunk.size(),
                 reinterpret_cast<short*>(pcmChunk.data()),
-                frameSize,
+                maxFrameSize,
                 0
                 );
 
             if (decodedSamples > 0) {
-
+                // Корректно подрезаем буфер под РЕАЛЬНО декодированное количество семплов
                 pcmChunk.resize(decodedSamples * sizeof(short));
+
                 if (m_writeToFile && m_unixFileReceiverNet.isOpen()) {
                     m_unixFileReceiverNet.write(pcmChunk);
                     m_unixSizeReceiverNet += pcmChunk.size();
                 }
             } else {
-                continue; // Ошибка декодирования
+                continue;
             }
         } else {
-            // Если декодер не инициализирован, пропускаем пакет
             continue;
         }
 
-        // Вычисляем уровень громкости входящего потока для UI
         int len = pcmChunk.size();
         int currentVolume = 0;
         const short *ptr = reinterpret_cast<const short*>(pcmChunk.constData());
@@ -343,22 +347,17 @@ void AudioWorker::onReadyReadUdp()
             emit speakerVolumeMeasured(currentVolume);
         }
 
-        // Применяем фильтр нижних частот (Баттерворт)
         applyFilters(reinterpret_cast<short*>(pcmChunk.data()), pcmChunk.size() / 2);
 
-        // Запись отладочного файла: Раскодированный чистый PCM на выходе
         if (m_writeToFile && m_unixFileReceiverOut.isOpen()) {
             m_unixFileReceiverOut.write(pcmChunk);
             m_unixSizeReceiverOut += pcmChunk.size();
         }
 
-        // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Вместо немедленной записи в динамик,
-        // складываем данные в потокобезопасную очередь Jitter-буфера
         {
             QMutexLocker locker(&m_bufferMutex);
             m_jitterBuffer.enqueue(pcmChunk);
 
-            // Если буфер переполняется из-за сетевого лага, сбрасываем старые пакеты
             if (m_jitterBuffer.size() > 15) {
                 m_jitterBuffer.dequeue();
             }
@@ -522,12 +521,23 @@ void AudioWorker::processPlayback()
     if (!m_audioOutputDevice || !m_audioSink) return;
 
     QByteArray pcmFrame;
+    static bool isPlaybackStarted = false;
+
     {
         QMutexLocker locker(&m_bufferMutex);
-        // Ждем пока накопится стартовый пакет буфера для исключения сетевого дрожания
-        if (m_jitterBuffer.size() < m_minJitterPackets) {
+
+        if (!isPlaybackStarted) {
+            if (m_jitterBuffer.size() < m_minJitterPackets) {
+                return;
+            }
+            isPlaybackStarted = true;
+        }
+
+        if (m_jitterBuffer.isEmpty()) {
+            isPlaybackStarted = false;
             return;
         }
+
         pcmFrame = m_jitterBuffer.dequeue();
     }
 

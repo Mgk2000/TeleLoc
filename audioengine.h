@@ -34,6 +34,8 @@ public:
     void setMicVolume(int level);
     void setSpeakerVolume(int level);
     void setAndroidVoipMode(bool enable, int audioSessionId = 0);
+    int speakerDataCount;
+    bool wasSound;
 
 signals:
     void micVolumeMeasured(int volume);
@@ -135,6 +137,9 @@ private:
     int m_speakerLevel = 100;
     bool m_writeToFile = false;
     bool m_isEchoTestMode = false;
+    QTimer speakerTimer;
+private slots:
+    void onSpeakerTick();
 };
 
 #endif // AUDIOENGINE_H

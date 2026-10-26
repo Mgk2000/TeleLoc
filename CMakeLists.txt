@@ -14,6 +14,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Gui
     Qml
     Quick
+    QuickControls2
     Network
     Multimedia
 )
@@ -90,6 +91,7 @@ target_link_libraries(appTeleLoc PRIVATE
     Qt6::Gui
     Qt6::Qml
     Qt6::Quick
+    Qt6::QuickControls2
     Qt6::Network
     Qt6::Multimedia
     opus

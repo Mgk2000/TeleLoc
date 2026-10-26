@@ -7,7 +7,8 @@
 #include <QCoreApplication>
 #include <QTimer>
 #include "networkengine.h"
-
+#include <QQmlApplicationEngine>
+#include <QQuickStyle>
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QtCore/qnativeinterface.h>
@@ -61,6 +62,7 @@ int main(int argc, char *argv[])
     qputenv("QT_ANDROID_DISABLE_ACCESSIBILITY", "1");
 
     QGuiApplication app(argc, argv);
+    //QQuickStyle::setStyle("Basic");
 #ifdef Q_OS_ANDROID
     qDebug() << "@@@ TeleLoc started";
     applyOrientationBasedOnDeviceType();

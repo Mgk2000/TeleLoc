@@ -43,6 +43,8 @@ NetworkEngine::NetworkEngine(QObject *parent)
         connect(udpSocket, &QUdpSocket::readyRead, this, &NetworkEngine::onReadyUdpRead);
         qDebug() << "@@@ СЕТЬ C++: Приемник Discovery успешно запущен на порту 28000 (Платформа без Android)";
     }
+    connect(&ringServer, &QTcpServer::newConnection, this, &NetworkEngine::onRingConnection);
+    ringServer.listen(QHostAddress::Any, 28501 /*PORT*/);
 #else
     qDebug() << "@@@ СЕТЬ C++: На Android прием UDP 28000 полностью отключен. Этим занимается Java-служба.";
 #endif
@@ -238,7 +240,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         m_ringbackTone->stop();
         m_busyTone->play();
         setCallingState(CallInfo::idle);
-        emit callStopped();
+        //emit callStopped();
     }
     else if (type == "reject_call") {
             qDebug() << "@@@incomingCall from parse reject_call";
@@ -248,6 +250,8 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
             emit callStopped();
     }
     else if (type == "stop_call") {
+        if (name != callInfo.name)
+            return;
         qDebug() << "@@@incomingCall from parse stop_call";
         m_ringbackTone->stop();
         m_incomingRing->stop();
@@ -320,38 +324,6 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
 
     tcpSocket->abort();
    // bool connected = false;
-#ifdef Q_OS_ANDROID1
-    bindSocketToWiFi(tcpSocket, netType);
-    tcpSocket->connectToHost(targetIp, 28500);
-/*    connect (tcpSocket,&QTcpSocket::connected, this, [this, data, connected](){
-        tcpSocket->write(data);
-        tcpSocket->waitForBytesWritten(1000);
-        tcpSocket->disconnectFromHost();
-
-
-    });*/
-
-    qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 4 для:" << name;
-    //if (!connected)
-    if (tcpSocket->waitForConnected(3000)) {
-        tcpSocket->write(data);
-        tcpSocket->waitForBytesWritten(1000);
-        tcpSocket->disconnectFromHost();
-        qDebug() << "@@@ СЕТЬ C++: Пакет вызова успешно отправлен на Java-сервер порта 28500";
-    } else {
-        qDebug() << "@@@ СЕТЬ C++ ОШИБКА: Порт 28500 не ответил. Пробую резервный порт C++:" << PORT;
-        tcpSocket->abort();
-        tcpSocket->connectToHost(targetIp, PORT);
-        if (tcpSocket->waitForConnected(3000)) {
-            tcpSocket->write(data);
-            tcpSocket->disconnectFromHost();
-        }
-        else {
-            //tcpSocket->abort();
-            return;
-        }
-    }
-#endif
     m_ringbackTone->play();
 }
 void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) {
@@ -662,7 +634,9 @@ void NetworkEngine::savePeersToConfig() {
 
 void NetworkEngine::incomingCall()
 {
-    qDebug() << "@@@incomingCall before play ip=" << callInfo.ip ;
+    qDebug() << "@@@incomingCall incomingCall Busy=" << callInfo.busy() << callInfo.ip ;
+    if (callInfo.busy())
+        return;
     m_incomingRing->play();
     setCallingState(CallInfo::inCalling);
 
@@ -695,12 +669,18 @@ void NetworkEngine::rejectBusy(const QString &ip)
     busyObj["type"] = "line_busy";
     busyObj["name"] = m_users.at(0).name;
     QByteArray busyData = QJsonDocument(busyObj).toJson(QJsonDocument::Compact);
-    if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
+    /*if (tcpClientSocket && tcpClientSocket->state() == QAbstractSocket::ConnectedState) {
         tcpClientSocket->write(busyData);
     } else if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
         tcpSocket->write(busyData);
+    }*/
+    QTcpSocket * busySocket = new QTcpSocket;
+    busySocket->deleteLater();
+    busySocket->connectToHost(ip, PORT);
+    if (busySocket->waitForConnected(500)) {
+        busySocket->write(busyData);
+        busySocket->waitForBytesWritten(500);
     }
-
 }
 
 void NetworkEngine::setCallingState(CallInfo::State st)
@@ -847,6 +827,29 @@ void NetworkEngine::sendDiscovery() {
     nb = udpSocket->writeDatagram(data, QHostAddress("192.168.137.255"), 28001);
     //qDebug() << QTime::currentTime() << "@@@ sendDiscovery" << nb << "bytes";
 
+}
+void NetworkEngine::onRingConnection() {
+    qDebug() << "NetworkEngine::onRingConnection()";
+    if (ringSocket) {
+        ringSocket->disconnectFromHost();
+        ringSocket->deleteLater();
+    }
+    ringSocket = ringServer.nextPendingConnection();
+    connect(ringSocket, &QTcpSocket::readyRead, this, &NetworkEngine::onReadyTcpRead);
+}
+void NetworkEngine::onRingRead() {
+    qDebug() << "@@@NetworkEngine::onRingRead() 1";
+    QTcpSocket *senderSocket = qobject_cast<QTcpSocket*>(sender());
+    if (!senderSocket) return;
+    QByteArray data = senderSocket->readAll();
+    //QString sdata = data1;
+    //QByteArray data(sdata.toUtf8());
+    qDebug() << "@@@ parse NetworkEngine::onReadyTcpRead() 2" << QString(data)
+             << "port=" << senderSocket->localPort();
+    QString ip = senderSocket->peerAddress().toString().toLower();
+    if (ip.startsWith("::ffff:"))
+        ip.remove("::ffff:");
+    parseIncomingSyncData(data, ip);
 }
 #endif
 
@@ -1121,6 +1124,12 @@ void NetworkEngine::autoAcceptCall()
     //emit autoAcceptCall();
     return;
 
+}
+
+void NetworkEngine::closeCallDialog()
+{
+    setCallingState(CallInfo::idle);
+    emit callStopped();
 }
 #ifdef Q_OS_ANDROID
 static jobject g_savedServiceInstance = nullptr;

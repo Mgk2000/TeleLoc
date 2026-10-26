@@ -265,7 +265,7 @@ Popup {
                                 console.log("$$$ incoming accept 2", callScreenPopup.callerName, callScreenPopup.callNetType );
                                 netEngine.acceptAudioCall(callScreenPopup.callerName, callScreenPopup.callNetType);
                                 console.log("$$$ incoming accept 3");
-                            } else {
+                            } else if (!netEngine.isCallSpeaking()){
                                 netEngine.startAudioCall(callScreenPopup.callerName, callScreenPopup.callNetType)
                             }
                         }

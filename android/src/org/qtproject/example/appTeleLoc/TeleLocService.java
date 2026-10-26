@@ -68,6 +68,23 @@ public class TeleLocService extends android.app.Service {
         } catch (Exception e) { Log.e(TAG, "Ошибка чтения JSON: " + e.getMessage()); }
         return new org.json.JSONObject();
     }
+    private void excludeUserDups(int ind){
+        UserInfo ui = users.get(ind);
+//        Log.w(TAG, "@@@Exclude " + ui.name + " " + ui.ip[0]);
+        for (int i =0; i< users.size(); i++)
+        {
+            if (i == ind) continue;
+            UserInfo u = users.get(i);
+ //           Log.d(TAG,"@@@excl " + i + u.name + " " + u.ip[0] + (u.ip[0] == ui.ip[0]));
+            if (u.name.equals(ui.name) || (!u.ip[0].equals("") && u.ip[0].equals(ui.ip[0]))
+                         || (!u.ip[1].equals("") && u.ip[1].equals(ui.ip[1]))
+                         || (!u.ip[2].equals("") && u.ip[2].equals(ui.ip[2])))
+                {
+ //                   Log.d(TAG, "@@@Excl removed");
+                    users.remove(i); i--;}
+
+        }
+    }
     public void saveConfig(org.json.JSONObject obj) {
         try {
             java.io.FileOutputStream fos = new java.io.FileOutputStream(configPath);
@@ -137,8 +154,6 @@ public class TeleLocService extends android.app.Service {
         Log.d(TAG, "@@@ [Java Service] onCreate() запущен в едином процессе приложения");
 
         try {
-            //configPath = this.getFilesDir().getAbsolutePath() + "/teleloc.conf";
-            //configPath = "/data/user_de/0/org.qtproject.example.appTeleLoc/files/teleloc.conf";
             Context deviceProtectedContext = this.createDeviceProtectedStorageContext();
             configPath = deviceProtectedContext.getFilesDir().getAbsolutePath() + "/teleloc.conf";
             // Это даст путь: /data/user_de/0/org.qtproject.example.appTeleLoc/files/teleloc.conf
@@ -195,6 +210,7 @@ public class TeleLocService extends android.app.Service {
         switch (commandId) {
             case 0:
                 users.get(0).setName(param);
+                excludeUserDups(0);
                 break;
             case 1:
                 lastCall = null;
@@ -462,21 +478,24 @@ private void updatePeer(String name, String sip, boolean android) {
             return;
         }
 
-        boolean found = false;
-        for (UserInfo user : users) {
+        int ind = -1;;
+        for (int i =0; i<users.size(); i++){
+            UserInfo user = users.get(i);
             if (user.name.equals(name)) {
-                found = true;
+                ind = i;
                 for (int j = 0; j < 3; j++) user.ip[j] = ip[j];
                 user.lastPing = System.currentTimeMillis();
             }
         }
-        if (!found) {
+        if (ind == -1) {
             UserInfo u = new UserInfo();
             u.name = name;
             for (int i = 0; i < 3; i++) u.ip[i] = ip[i];
             u.lastPing = System.currentTimeMillis();
             users.add(u);
+            ind = users.size() - 1;
         }
+    excludeUserDups(ind);
         saveUsers();
     } catch (Exception e) {
         Log.e(TAG, "Ошибка updatePeer: " + e.getMessage());

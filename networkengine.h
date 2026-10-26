@@ -44,8 +44,10 @@ struct CallInfo {
 void writeJsonConfig(const QJsonObject & obj);
 QJsonObject readJsonConfig();
 QString configName();
+class NetworkEngine;
 extern bool developer;
 extern bool isTablet;
+extern NetworkEngine * netEngine;
 class UsersModel;
 class NetworkEngine : public QObject
 {
@@ -78,6 +80,7 @@ public:
         {return callInfo.state == CallInfo::inCalling ||
                  callInfo.state == CallInfo::outCalling;}
     Q_INVOKABLE bool isCallSpeaking () const {return callInfo.state == CallInfo::speaking;}
+
     CallInfo callInfo;
     AudioEngine *audioEngine;
     UsersModel* usersModel;
@@ -93,7 +96,7 @@ public:
     void incomingCall();
     bool isUserAndroid(const QString &name) const;
     void autoAcceptCall();
-
+    void closeCallDialog();
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -112,6 +115,9 @@ private slots:
     void onReadyTcpRead();
     void onReadyUdpRead();
 #ifndef Q_OS_ANDROID
+    void onRingConnection();
+    void onRingRead();
+
     void sendDiscovery();
     void updateInterfaces();
 #else
@@ -148,6 +154,8 @@ private:
     void sendCommandToTeleLocService(int commandId, const QString &payload);
     void bindCppProcessToWiFi();
 #else
+    QTcpServer ringServer;
+    QTcpSocket *ringSocket = 0;
     void processDiscovery(const QString & name, const QJsonObject & obj);
     void saveConfig();
 #endif
