@@ -104,12 +104,13 @@
         </provider>
         <!-- Изменено foregroundServiceType на phoneCall|mediaPlayback для легализации рации -->
 <service android:name="org.qtproject.example.appTeleLoc.TeleLocService"
-         android:foregroundServiceType="phoneCall|mediaPlayback"	
+         android:process=":remote_service"
+         android:foregroundServiceType="phoneCall|mediaPlayback" 
          android:stopWithTask="false"
          android:directBootAware="true"
          android:exported="false">
-    <meta-data android:name="android.app.lib_name" android:value="appTeleLoc" />
-    <meta-data android:name="android.app.background_running" android:value="true" />
+    <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+              android:value="Локальная рация P2P" />
 </service>
         <!-- Автономный системный приёмник, караулящий импульсы подъёма из глубокого сна -->
 <receiver android:name=".TeleLocWakeReceiver" 

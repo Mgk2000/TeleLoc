@@ -53,7 +53,7 @@ public class TeleLocService extends android.app.Service {
     long lastCallTime = 0;
     public int cnt = 0;
 
-    public static native void sendDataToCpp(Object serviceObj, int eventId, String payloadData);
+    //public static native void sendDataToCpp(Object serviceObj, int eventId, String payloadData);
 
     public org.json.JSONObject readJsonConfig() {
         try {
@@ -261,14 +261,21 @@ public class TeleLocService extends android.app.Service {
                 byte[] finalData = baos.toByteArray();
                 if (finalData.length > 0) {
                     String message = new String(finalData, 0, finalData.length, "UTF-8");
+                    Log.w(TAG, "@@@tcp listenforcalls " + message);
                     try {
                         org.json.JSONObject obj = new org.json.JSONObject(message);
-                        if ("incoming_call".equals(obj.optString("type"))) {
-                            Log.w(TAG, "@@@listenforcalls incoming_call" + message + isCppContextAlive());
+                        String type = obj.optString("type");
+                        if ("incoming_call".equals(type)) {
+                            Log.w(TAG, "@@@tcp listenforcalls incoming_call" + message);
                             saveCall(obj.optString("name"), obj.optString("ip"), obj.optInt("netType"));
                             triggerFullScreenCall(message);
                             sendToCpp(1,message);
                         }
+                        else if ("set_user".equals(type)){
+                            String newName = obj.optString("name");
+                            Log.w(TAG, "@@@tcp listenforcalls set_userl" + newName);
+                            users.get(0).setName(newName);
+                            }
                     } catch (org.json.JSONException jsonEx) {
                         Log.e(TAG, "Ошибка парсинга TCP JSON: " + jsonEx.getMessage());
                     }
@@ -297,7 +304,7 @@ public class TeleLocService extends android.app.Service {
                     jDiscovery.put("ip", ipArr);
 
                     String json = jDiscovery.toString();
-                    Log.d(TAG, "@@@#sendDiscovery " +json);
+                   // Log.d(TAG, "@@@#sendDiscovery " +json);
                     byte[] bytes = json.getBytes("UTF-8");
                     java.net.DatagramSocket socket = new java.net.DatagramSocket();
                     socket.setBroadcast(true);
@@ -377,7 +384,7 @@ private void startUdpReceiver() {
                     int netType  = obj.optInt("netType");
                     String pIp = obj.optString("ip");
                     boolean android = obj.optInt("android") == 1;
-                    Log.d(TAG, "@@@UDPReceive " + message);
+                    //Log.d(TAG, "@@@UDPReceive " + message);
                     if ("discovery".equals(stype)) {
                         if (pName != null && !pName.isEmpty() && pIp != null && !pIp.isEmpty()) {
                             updatePeer(pName, pIp, android);
@@ -596,7 +603,7 @@ private void createMyUser() {
     for (int i = 0; i < 3; i++) u.ip[i] = getLocalIpAddress(i);
     users.add(u);
 }
-private boolean isCppContextAlive() {
+/*private boolean isCppContextAlive() {
     try {
         // Делаем легкий холостой вызов JNI (eventId = 0).
         // Если Qt и C++ живы в памяти — проверка мгновенно пройдет без ошибок!
@@ -608,6 +615,7 @@ private boolean isCppContextAlive() {
         return false;
     }
 }
+
 void sendToCpp(int num, String message) {
 
     if (!isCppContextAlive()) {
@@ -615,6 +623,42 @@ void sendToCpp(int num, String message) {
         return;
         }
     sendDataToCpp(TeleLocService.this, num, message);
+}*/
+void sendToCpp(int num, String message) {
+    new Thread(() -> {
+        try {
+            org.json.JSONObject obj = new org.json.JSONObject();
+            org.json.JSONObject msgobj = new org.json.JSONObject(message);
+
+            switch (num) {
+                case 0:
+                    obj.put("type","peers");
+                    obj.put("data", message);
+                    obj.put("name", users.get(0).name);
+                    break;
+                case 1:
+                    obj.put("type", "incoming_call");
+                    obj.put("data", message);
+                    obj.put("name", msgobj.optString("name"));
+                    obj.put("net_type", msgobj.optString("netType"));
+                    break;
+                default: ;
+            }
+            String payload = obj.toString();
+            // Стучимся в локальный сокет C++ ядра Qt
+            java.net.Socket socket = new java.net.Socket("127.0.0.1", 28000);
+            java.io.OutputStream out = socket.getOutputStream();
+            //if (num == 1)
+            //Log.d(TAG, "@@@exc sendToCpp" + payload);
+            //Log.d(TAG, "@@@exc meessage" + msgobj);
+            // Пишем строку и обязательно добавляем символ перевода строки \n, чтобы in.readLine() в C++ сработал
+            out.write((payload + "\n").getBytes("UTF-8"));
+            out.flush();
+            socket.close();
+        } catch (Exception e) {
+            // Если C++ интерфейс закрыт или смахнут, сокет просто мирно упадет в catch без краша службы
+        }
+    }).start();
 }
 
 @Override

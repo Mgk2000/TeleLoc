@@ -108,6 +108,28 @@ NetworkEngine::~NetworkEngine() {
     sendCommandToTeleLocService(2, "");
 #endif
 }
+void NetworkEngine::sendDataByTcp(const QString &name, QByteArray data, QString targetIp, int port)
+{
+    QTcpSocket *socket = new QTcpSocket();
+    bindSocketToWiFi(socket, callInfo.netType);
+
+    QObject::connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+    socket->connectToHost(targetIp, port);
+
+    if (socket->waitForConnected(3000)) {
+        // Форматируем данные так же, как их ждет Java-сервис
+        // QString payload = QString("%1;%2").arg(callerName, callerIp);
+
+        socket->write(data);
+        socket->flush();
+        socket->disconnectFromHost();
+        qWarning() << "@@@call Send call by TCP to" << name <<targetIp << port;
+    } else {
+        qDebug() << "@@@call Ошибка вызова по TCP:" << socket->errorString();
+        socket->deleteLater();
+    }
+}
+
 void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
     if (m_users.isEmpty()) return;
     QByteArray data = getCallData(netType);
@@ -115,7 +137,6 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
 
     m_ringbackTone->play();
     if (m_users.isEmpty()) return;
-    QTcpSocket *socket = new QTcpSocket();
     QString targetIp;
     for (int i =1; i<m_users.count(); i++)
         if (m_users[i].name == name)
@@ -125,23 +146,15 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
         }
     qDebug() << "@@@call Calling" << name << targetIp;
     int port = 28501;
-    bindSocketToWiFi(socket, callInfo.netType);
+    sendDataByTcp(name, data, targetIp, port);
+}
+QString NetworkEngine::getIpByName(const QString &name, int netType)
+{
+    for (int i =0; i< m_users.count(); i++)
+        if (m_users[i].name == name)
+            return m_users[i].ip[netType];
+    return "";
 
-    QObject::connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
-    socket->connectToHost(targetIp, port);
-
-    if (socket->waitForConnected(3000)) {
-        // Форматируем данные так же, как их ждет Java-сервис
-       // QString payload = QString("%1;%2").arg(callerName, callerIp);
-
-        socket->write(data);
-        socket->flush();
-        socket->disconnectFromHost();
-        qWarning() << "@@@call Send call by TCP to" << name;
-    } else {
-        qDebug() << "@@@call Ошибка вызова по TCP:" << socket->errorString();
-        socket->deleteLater();
-    }
 }
 
 void NetworkEngine::handleVoipWakeup(const QString &callerName) {
@@ -200,23 +213,26 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
 #ifndef Q_OS_ANDROID1
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
-    qDebug() << "@@@ parseIncomingSyncData ndata=" << doc ;
+
+    //qDebug() << "@@@exc parseIncomingSyncData ndata=" << doc ;
     if (doc.isNull()) return;
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
+
     QString name = obj["name"].toString();
     if (name == m_users[0].name)
         return;
-    qDebug() << "@@@- parse=" << QString(data);
+    qDebug() << "@@@exc parse type=" << type << "name=" << name;
     if (type == "incoming_call") {
-        qDebug() << "@@@incomingCall state=" << callInfo.state << QString(data);
+        qDebug() << "@@@exc incomingCall state=" << callInfo.state << QString(data);
         if (callInfo.busy())
         {
             rejectBusy(senderIpStr);
             return;
         }
         callInfo.netType = obj["net_type"].toInt();
-        callInfo.ip = senderIpStr;
+        callInfo.ip = getIpByName(name, callInfo.netType);;
+
         if (callInfo.ip.startsWith("::ffff:"))
             callInfo.ip.remove("::ffff:");
 
@@ -344,9 +360,11 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
 
     tcpSocket->abort();
     bindSocketToWiFi(tcpSocket, callInfo.netType);
+    qDebug() << "@@@tcp connect to 28000 1";
     tcpSocket->connectToHost(callInfo.ip, PORT);
     if (tcpSocket->waitForConnected(1200)) {
         tcpSocket->write(data);
+        qDebug() << "@@@exc accept" << data << "ip=" << callInfo.ip;
         tcpSocket->waitForBytesWritten(500);
     }
 
@@ -374,6 +392,7 @@ void NetworkEngine::sendTCP(const QString& command)
         qDebug() << "@@@sendtcp 2 ip=" << targetIp << "data=" << data;
         tcpSocket->abort();
         qDebug() << "@@@sendtcp 3 ip=" << targetIp << "data=" << data;
+        qDebug() << "@@@tcp connect to 28000 1";
         bindSocketToWiFi(tcpSocket, callInfo.netType);
         tcpSocket->connectToHost(targetIp, PORT);
         qDebug() << "@@@sendtcp 4 ip=" << targetIp << "data=" << data;
@@ -403,6 +422,7 @@ void NetworkEngine::stopAudioCall() {
     qDebug() << "@@@stop Call ip=" << targetIp << "data=" << data;
     if (!targetIp.isEmpty() && tcpSocket) {
         tcpSocket->abort();
+        qDebug() << "@@@tcp connect to 28000 3";
         tcpSocket->connectToHost(targetIp, PORT);
         qDebug() << "@@@ StopAudio connect to" << targetIp << PORT;
         if (tcpSocket->waitForConnected(500)) {
@@ -674,6 +694,7 @@ void NetworkEngine::rejectBusy(const QString &ip)
     } else if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
         tcpSocket->write(busyData);
     }*/
+    qDebug() << "@@@tcp connect to 28000 1";
     QTcpSocket * busySocket = new QTcpSocket;
     busySocket->deleteLater();
     busySocket->connectToHost(ip, PORT);
@@ -762,6 +783,8 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
             for (int i = 1; i < m_users.size(); ++i) {
                 if (m_users[i].isAlive() && !m_users[i].ip[2].isEmpty()) {
                     QTcpSocket tmpSocket;
+                    qDebug() << "@@@tcp connect to 28000 4";
+
                     tmpSocket.connectToHost(m_users[i].ip[2], PORT);
                     if (tmpSocket.waitForConnected(500)) {
                         tmpSocket.write(data);
@@ -783,6 +806,8 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
     }
     if (!targetIp.isEmpty()) {
         QTcpSocket tmpSocket;
+        qDebug() << "@@@tcp connect to 28000 5";
+
         tmpSocket.connectToHost(targetIp, PORT);
         if (tmpSocket.waitForConnected(1000)) {
             tmpSocket.write(data);
@@ -854,24 +879,33 @@ void NetworkEngine::onRingRead() {
 #endif
 
 void NetworkEngine::onNewConnection() {
-    qDebug() << "NetworkEngine::onNewConnection()";
     if (tcpClientSocket) {
         tcpClientSocket->disconnectFromHost();
         tcpClientSocket->deleteLater();
     }
     tcpClientSocket = tcpServer->nextPendingConnection();
+    //qDebug() << "@@@@tcp onNewConnection" << tcpClientSocket->localAddress() << tcpClientSocket->localPort();
     connect(tcpClientSocket, &QTcpSocket::readyRead, this, &NetworkEngine::onReadyTcpRead);
 }
 
 void NetworkEngine::onReadyTcpRead() {
-    qDebug() << "@@@NetworkEngine::onReadyTcpRead() 1";
+    //qDebug() << "@@@exc NetworkEngine::onReadyTcpRead() 1";
     QTcpSocket *senderSocket = qobject_cast<QTcpSocket*>(sender());
     if (!senderSocket) return;
     QByteArray data = senderSocket->readAll();
-    //QString sdata = data1;
-    //QByteArray data(sdata.toUtf8());
-    qDebug() << "@@@ parse NetworkEngine::onReadyTcpRead() 2" << QString(data)
+    if (QString(data).contains(("incoming_call"))) {
+        qDebug() << "@@@exc parse onReadyTcpRead() 2" << QString(data)
              << "port=" << senderSocket->localPort();
+        QJsonObject dataObj = QJsonDocument::fromJson(data).object();
+        QJsonObject obj;
+        obj["type"] = "incoming_call";
+        obj["name"] = dataObj["name"];
+        obj["net_type"] = dataObj["net_type"];
+        QJsonDocument doc(obj);
+        data = doc.toJson(QJsonDocument::Compact);
+        qDebug() << "@@@exc data=" << QString(data);
+    }
+
     QString ip = senderSocket->peerAddress().toString().toLower();
     if (ip.startsWith("::ffff:"))
         ip.remove("::ffff:");
@@ -1164,7 +1198,7 @@ Java_org_qtproject_example_appTeleLoc_TeleLocService_sendDataToCpp(
     }
 }
 void NetworkEngine::sendCommandToTeleLocService(int commandId, const QString &param) {
-    if (g_savedServiceInstance != nullptr) {
+/*    if (g_savedServiceInstance != nullptr) {
         QJniObject service(g_savedServiceInstance);
         QJniObject jParam = QJniObject::fromString(param);
         service.callMethod<void>(
@@ -1174,6 +1208,19 @@ void NetworkEngine::sendCommandToTeleLocService(int commandId, const QString &pa
             jParam.object<jstring>()
             );
         qDebug() << "@@@exc [C++] Команда ушла в Java." << commandId << param;
+    }*/
+    qDebug() << "@@@tcp send" << commandId << param;
+    switch (commandId)
+    {
+    case 0: {
+        QJsonObject obj;
+        obj["type"] = "set_user";
+        obj["name"] = param;
+        QJsonDocument doc(obj);
+        QByteArray data = doc.toJson(QJsonDocument::Compact);
+        sendDataByTcp("", data,"127.0.0.1", 28501 ) ;
+        break;}
+    default:;
     }
 }
 
@@ -1316,3 +1363,4 @@ void NetworkEngine::bindCppProcessToWiFi() {
     }
 }
 #endif
+

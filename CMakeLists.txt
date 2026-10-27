@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
+set(QT_NO_CREATE_QML_LINT_TARGETS ON CACHE INTERNAL "")
 project(TeleLoc VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -56,7 +57,6 @@ if(WIN32 AND MINGW)
     add_compile_options(-mstackrealign)
 endif()
 # ---------------------------------------------------------------------------------------
-
 qt_add_executable(appTeleLoc
     main.cpp
     networkengine.h
@@ -64,7 +64,10 @@ qt_add_executable(appTeleLoc
     audioengine.h
     audioengine.cpp
 )
-
+set_target_properties(appTeleLoc PROPERTIES
+    QT_QML_LINT_ARGUMENTS "--quiet"
+)
+set(QT_NO_CREATE_QML_LINT_TARGETS ON)
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0

@@ -18,6 +18,7 @@
 // ============================================================================
 
 AudioEngine::AudioEngine(QObject *parent)
+
     : QObject(parent)
     , m_worker(nullptr)
     , m_micLevel(100)
@@ -222,7 +223,7 @@ void AudioWorker::stopAudio()
     }
 
     // Очищаем внутренние буферы
-    if (false)
+    //if (false)
     {
         QMutexLocker locker(&m_bufferMutex);
         m_jitterBuffer.clear();

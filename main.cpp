@@ -217,9 +217,17 @@ int main(int argc, char *argv[])
                 QCoreApplication::exit(-1);
         }, Qt::QueuedConnection);
     engine.load(url);
-    // ... (весь ваш код инициализации QML и netEngine выше) ...
-
     int result = app.exec();
+
+#ifdef Q_OS_ANDROID
+    qDebug() << "@@@ [C++ Main] Интерфейс закрыт. Экстренно гасим процесс, спасая Java-службу...";
+
+    // std::_Exit мгновенно останавливает C++ процесс на уровне ядра Linux.
+    // Потоки hwuiTask1 не успеют вызвать краш мьютексов, SIGABRT не произойдет,
+    // и Android позволит вашей Java-службе спокойно продолжить работу в фоне!
+    std::_Exit(result);
+#else
     return result;
+#endif
 }
 

@@ -1,8 +1,12 @@
+// qmllint disable import-unresolved
 import QtQuick
+// qmllint disable import-unresolved
 import QtQuick.Controls
+// qmllint disable import-unresolved
 import QtQuick.Layouts
+// qmllint disable import-unresolved
 import QtQuick.Controls 2.15 // Убедитесь, что этот импорт есть в начале файла
-ApplicationWindow {
+ ApplicationWindow {
     id: window
     visible: true
     visibility: Qt.platform.os === "windows" ? Window.Windowed : Window.FullScreen

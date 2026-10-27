@@ -97,6 +97,8 @@ public:
     bool isUserAndroid(const QString &name) const;
     void autoAcceptCall();
     void closeCallDialog();
+    void sendDataByTcp(const QString &name, QByteArray data, QString targetIp, int port);
+
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -168,6 +170,8 @@ private:
         else
             return m_users[0].ip[netType];
     }
+    QString getIpByName(const QString & mame, int netType);
+
     void sendCallByTcp(const QString &name, int netType);
     void setNetType(int _netType);
     void updateUsersList();

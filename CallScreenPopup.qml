@@ -1,5 +1,6 @@
-// CallScreenPopup.qml
+// qmllint disable import-unresolved
 import QtQuick
+// qmllint disable import-unresolved
 import QtQuick.Controls
 
 Popup {
