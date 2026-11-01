@@ -238,16 +238,18 @@ public class TeleLocService extends android.app.Service {
                 }
             }
 
-            if (wifiDirectNetwork != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            if (false && wifiDirectNetwork != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 serverSocket = new ServerSocket();
                 serverSocket.bind(new java.net.InetSocketAddress("0.0.0.0", TCP_PORT));
+                Log.d(TAG, "@@@tcp Wi-Fi Direct detected");
             } else {
-                serverSocket = new ServerSocket(TCP_PORT, 50, java.net.InetAddress.getByName("0.0.0.0"));
+                //serverSocket = new ServerSocket(TCP_PORT, 50, java.net.InetAddress.getByName("0.0.0.0"));
             }
+            serverSocket = new ServerSocket(TCP_PORT);
 
             while (m_isRunning) {
                 Socket clientSocket = serverSocket.accept();
-                clientSocket.setTcpNoDelay(true);
+                //clientSocket.setTcpNoDelay(true);
                 InputStream input = clientSocket.getInputStream();
                 java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
                 byte[] buffer = new byte[4096];
@@ -304,7 +306,7 @@ public class TeleLocService extends android.app.Service {
                     jDiscovery.put("ip", ipArr);
 
                     String json = jDiscovery.toString();
-                   // Log.d(TAG, "@@@#sendDiscovery " +json);
+                    Log.d(TAG, "@@@#sendDiscovery alive=" + m_isRunning +json);
                     byte[] bytes = json.getBytes("UTF-8");
                     java.net.DatagramSocket socket = new java.net.DatagramSocket();
                     socket.setBroadcast(true);
@@ -332,7 +334,7 @@ public class TeleLocService extends android.app.Service {
                         socket.send(packet);
                     }
                     socket.close();
-                    Thread.sleep(3000);
+                    Thread.sleep(10000);
 
                     if (m_isRunning) {
                         sendToCpp(0, usersToString());
@@ -342,11 +344,12 @@ public class TeleLocService extends android.app.Service {
                 }
             }
         }).start();
-
+        if (false)
         new Thread(() -> {
             try {
-                m_serverSocket = new ServerSocket(28500);
+                m_serverSocket = new ServerSocket(28501);
                 while (m_isRunning) {
+                    Log.d(TAG, "@@@tcp m_serverSocket 2");
                     Socket clientSocket = m_serverSocket.accept();
                     BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), "UTF-8"));
                     String line = in.readLine();
@@ -357,13 +360,13 @@ public class TeleLocService extends android.app.Service {
                                 triggerFullScreenCall(line);
                             }
                         } catch (Exception e) {
-                            Log.e(TAG, "Ошибка JSON на 28500");
+                            Log.e(TAG, "@@@tcp Ошибка JSON на 28501");
                         }
                     }
                     clientSocket.close();
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Ошибка TCP сервера 28500: " + e.getMessage());
+                Log.e(TAG, "@@@tcp Ошибка TCP сервера 28500: " + e.getMessage());
             }
         }).start();
     }

@@ -21,11 +21,11 @@ AudioEngine::AudioEngine(QObject *parent)
 
     : QObject(parent)
     , m_worker(nullptr)
-    , m_micLevel(100)
-    , m_speakerLevel(100)
     , m_writeToFile(false)
     , m_isEchoTestMode(false)
 {
+    m_maxSpeakerLevel = getAndroidMaxSpeakerVolume() ;
+
     readLevels();
 
     // 1. Создаем воркер и поток для звука
@@ -43,6 +43,7 @@ AudioEngine::AudioEngine(QObject *parent)
     m_workerThread.start(QThread::TimeCriticalPriority); // Высокий приоритет для аудио
     speakerTimer.setInterval(1000);
     connect(&speakerTimer, SIGNAL (timeout()), this, SLOT(onSpeakerTick()));
+    initConfigLevels();
 }
 
 AudioEngine::~AudioEngine()
@@ -54,11 +55,9 @@ AudioEngine::~AudioEngine()
 void AudioEngine::startRecording(const QString &targetIp)
 {
     qDebug() << "@@@ [Controller] Requesting audio start targeting IP:" << targetIp;
-
+    initConfigLevels();
     // Синхронизируем текущие настройки перед запуском
-    m_worker->setMute(m_micLevel == 0);
-    m_worker->setMicVolume(m_micLevel);
-    m_worker->setSpeakerVolume(m_speakerLevel);
+//    m_worker->setMute(m_micLevel == 0);
     m_worker->setWriteToFile(m_writeToFile);
     m_worker->setEchoTest(m_isEchoTestMode);
     m_worker->wasSound = false;
@@ -76,6 +75,7 @@ void AudioEngine::stop()
     qDebug() << "@@@ [Controller] Requesting audio stop";
     QMetaObject::invokeMethod(m_worker, &AudioWorker::stopAudio, Qt::QueuedConnection);
     speakerTimer.stop();
+    restoreLevels();
 }
 
 void AudioEngine::startWriteToFile()
@@ -102,26 +102,19 @@ void AudioEngine::muteMicrophone(bool mute)
         }, Qt::QueuedConnection);
 }
 
-void AudioEngine::setMicLevel(int level)
+void AudioEngine::setMicLevel(int level, bool save)
 {
-    if (m_micLevel != level) {
-        m_micLevel = level;
-        saveLevels();
-        QMetaObject::invokeMethod(m_worker, [this, level]() {
-                m_worker->setMicVolume(level);
-            }, Qt::QueuedConnection);
+    qDebug() << "@@@sound setMicLevel" << level << "remote" << remoteControl ;
+    if (remoteControl)
+    {
+        netEngine->setRemoteMicLevel(level);
+        return;
     }
-}
-
-void AudioEngine::setSpeakerLevel(int level)
-{
-    if (m_speakerLevel != level) {
-        m_speakerLevel = level;
-        saveLevels();
-        QMetaObject::invokeMethod(m_worker, [this, level]() {
-                m_worker->setSpeakerVolume(level);
-            }, Qt::QueuedConnection);
-    }
+    if (save)
+        saveConfigLevels();
+    QMetaObject::invokeMethod(m_worker, [this, level]() {
+        m_worker->setMicLevel(level);
+    }, Qt::QueuedConnection);
 }
 
 void AudioEngine::toggleEchoTest()
@@ -134,15 +127,35 @@ void AudioEngine::toggleEchoTest()
 }
 
 // Заглушки для сохранения уровней (реализуйте по вашей логике)
-void AudioEngine::saveLevels() {}
 void AudioEngine::readLevels() {
-    emit initMicLevel(m_micLevel);
-    emit initSpeakerLevel(m_speakerLevel);
+}
+
+void AudioEngine::saveConfigLevels()
+{
+    auto conf = readJsonConfig();
+    conf["mic_level"] = getMicLevel();
+    conf["speaker_level"] = getSpeakerLevel();
+    writeJsonConfig(conf);
+    qDebug() << "@@@sound SaveConfig mic=" << getMicLevel() << "speaker=" << getSpeakerLevel();
+}
+
+void AudioEngine::initConfigLevels()
+{
+    saveLevels();
+    auto conf = readJsonConfig();
+    int mic = conf["mic_level"].toInt(30);
+    int speak = conf["speaker_level"].toInt(30);
+    setMicLevel (mic );
+    setSpeakerLevel(speak);
+    qDebug() << "@@@sound init mic="  << mic << "speak=" << speak;
+    emit initMicLevel(mic);
+    emit initSpeakerLevel(speak);
+
 }
 
 void AudioEngine::onSpeakerTick()
 {
-    qDebug() << "@@@audio data=" << m_worker->speakerDataCount;
+    //qDebug() << "@@@audio data=" << m_worker->speakerDataCount;
     if (m_worker-> wasSound && !m_worker->speakerDataCount) {
         this->stop();
         netEngine->closeCallDialog();
@@ -402,7 +415,6 @@ void AudioWorker::initAudio(const QString &targetIp)
 
     // Конфигурируем микрофон
     m_audioSource = new QAudioSource(QMediaDevices::defaultAudioInput(), format, this);
-
     // Создаем кодеки Opus
     initOpus();
 
@@ -475,19 +487,33 @@ void AudioWorker::onMicDataReady()
         }
         currentVolume = (currentVolume * 100) / 32767;
         emit micVolumeMeasured(currentVolume);
-
-        // --- ДИНАМИЧЕСКИЙ ЭХО-ДЕМПИНГ ---
-        bool isPartnerSpeaking = false;
-        {
-            QMutexLocker locker(&m_bufferMutex);
-            isPartnerSpeaking = !m_jitterBuffer.isEmpty();
-        }
-        if (isPartnerSpeaking) {
-            for (int i = 0; i < len / 2; ++i) {
-                pcmPtr[i] = static_cast<short>(pcmPtr[i] * 0.2f); // Ослабляем микрофон, когда идет звук из сети
+        if (m_micLevel == 0) {
+            // --- ДИНАМИЧЕСКИЙ ЭХО-ДЕМПИНГ ---
+            bool isPartnerSpeaking = false;
+            {
+                QMutexLocker locker(&m_bufferMutex);
+                isPartnerSpeaking = !m_jitterBuffer.isEmpty();
+            }
+            if (isPartnerSpeaking) {
+                for (int i = 0; i < len / 2; ++i) {
+                    pcmPtr[i] = static_cast<short>(pcmPtr[i] * 0.2f); // Ослабляем микрофон, когда идет звук из сети
+                }
             }
         }
+        else {
+            // Внутри AudioWorker::onMicDataReady() при обработке chunk:
+            float factor = static_cast<float>(m_micLevel) / 100.0f; // Переводим 0-100 в множитель 0.0 - 1.0
 
+            for (int i = 0; i < len / 2; ++i) {
+                int calculatedSample = static_cast<int>(pcmPtr[i] * factor);
+
+                // Защита от жесткого цифрового клиппинга (выхода за границы short)
+                if (calculatedSample > 32767) calculatedSample = 32767;
+                if (calculatedSample < -32768) calculatedSample = -32768;
+
+                pcmPtr[i] = static_cast<short>(calculatedSample);
+            }
+        }
         // 2. Отладочный файл: Обработанный микрофон перед отправкой в сеть/кодек
         if (m_writeToFile && m_unixFileSenderNet.isOpen()) {
             m_unixFileSenderNet.write(chunk);
@@ -563,16 +589,16 @@ void AudioWorker::setWriteToFile(bool enable)
         QByteArray dummyHeader(44, 0);
 
         m_unixFileSenderIn.setFileName(musicDir + "senderIn.wav");
-        if (m_unixFileSenderIn.open(QIODevice::WriteOnly | QIODevice::Truncate)) m_unixFileSenderIn.write(dummyHeader);
+        if (m_unixFileSenderIn.open(QIODevice::WriteOnly/* | QIODevice::Truncate*/)) m_unixFileSenderIn.write(dummyHeader);
 
         m_unixFileSenderNet.setFileName(musicDir + "senderNet.wav");
-        if (m_unixFileSenderNet.open(QIODevice::WriteOnly | QIODevice::Truncate)) m_unixFileSenderNet.write(dummyHeader);
+        if (m_unixFileSenderNet.open(QIODevice::WriteOnly /*| QIODevice::Truncate*/)) m_unixFileSenderNet.write(dummyHeader);
 
         m_unixFileReceiverNet.setFileName(musicDir + "receiverNet.wav");
-        if (m_unixFileReceiverNet.open(QIODevice::WriteOnly | QIODevice::Truncate)) m_unixFileReceiverNet.write(dummyHeader);
+        if (m_unixFileReceiverNet.open(QIODevice::WriteOnly /*| QIODevice::Truncate*/)) m_unixFileReceiverNet.write(dummyHeader);
 
         m_unixFileReceiverOut.setFileName(musicDir + "receiverOut.wav");
-        if (m_unixFileReceiverOut.open(QIODevice::WriteOnly | QIODevice::Truncate)) m_unixFileReceiverOut.write(dummyHeader);
+        if (m_unixFileReceiverOut.open(QIODevice::WriteOnly /*| QIODevice::Truncate*/)) m_unixFileReceiverOut.write(dummyHeader);
 
         qDebug() << "@@@ [Worker] Отладочные WAV файлы открыты по пути:" << musicDir;
     } else {
@@ -652,11 +678,76 @@ void AudioWorker::freeOpus()
 
 void AudioWorker::setMute(bool mute) { m_isMuted = mute; }
 void AudioWorker::setEchoTest(bool enable) { m_isEchoTestMode = enable; }
-void AudioWorker::setMicVolume(int level) { m_micLevel = level; }
-// Было с ошибкой: static_cast(level)
-void AudioWorker::setSpeakerVolume(int level) { m_speakerLevel = level; if (m_audioSink) m_audioSink->setVolume(static_cast<float>(level) / 100.0f); }
+void AudioEngine::setSpeakerLevel(int level, bool save){
+
+    m_worker->setSpeakerLevel(level); //if (m_audioSink) m_audioSink->setVolume(static_cast<float>(level) / 100.0f);
+    setAndroidAbsoluteSpeakerVolume (level *m_maxSpeakerLevel / 100.0f);
+    if (save)
+        saveConfigLevels();
+    qDebug () << "@@@sound setSpeakerLevel" << level << m_maxSpeakerLevel;
+}
 void AudioEngine::setWriteToFile(bool enable)
 {
     if (enable) startWriteToFile();
     else stopWriteToFile();
+}
+
+void setAndroidAbsoluteSpeakerVolume(int volume) {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
+    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
+
+    if (audioManager.isValid()) {
+        int streamType = 3; // STREAM_MUSIC
+
+        // Флаг 0 - поменять тихо в фоне.
+        // Флаг 1 (FLAG_SHOW_UI) - принудительно показать системную шторку громкости Android на экране!
+        int flags = 1;
+
+        audioManager.callMethod<void>("setStreamVolume", "(III)V", streamType, (jint)volume, flags);
+    }
+#endif
+}
+
+int getAndroidMaxSpeakerVolume() {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
+    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
+
+    if (audioManager.isValid()) {
+        return audioManager.callMethod<jint>("getStreamMaxVolume", "(I)I", 3);
+    }
+#endif
+    return 15;
+}
+
+void setAndroidSystemMicMute(bool mute) {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
+    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
+
+    if (audioManager.isValid()) {
+        // Полностью глушит или включает микрофон на уровне аудио-сервера Android
+        audioManager.callMethod<void>("setMicrophoneMute", "(Z)V", (jboolean)mute);
+    }
+#endif
+}
+
+int getAndroidAbsoluteSpeakerVolume() {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
+    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
+
+    if (audioManager.isValid()) {
+        // STREAM_MUSIC = 3 (стандартный медиа-поток для рации)
+        int streamType = 3;
+        int currentVol = audioManager.callMethod<jint>("getStreamVolume", "(I)I", streamType);
+        return currentVol;
+    }
+#endif
+    return 100;
 }

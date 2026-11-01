@@ -48,6 +48,7 @@ class NetworkEngine;
 extern bool developer;
 extern bool isTablet;
 extern NetworkEngine * netEngine;
+extern bool remoteControl;
 class UsersModel;
 class NetworkEngine : public QObject
 {
@@ -67,6 +68,7 @@ public:
     Q_INVOKABLE void debugUsers();
     Q_INVOKABLE void setDeveloper (bool d);
     Q_INVOKABLE bool getDeveloper () {return developer;}
+    Q_INVOKABLE void setRemoteControl (bool b) {remoteControl = b;}
     void handleVoipWakeup(const QString &callerName);
     void parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr);
     //QList<UserInfo> loadPeersFromConfig();
@@ -80,6 +82,7 @@ public:
         {return callInfo.state == CallInfo::inCalling ||
                  callInfo.state == CallInfo::outCalling;}
     Q_INVOKABLE bool isCallSpeaking () const {return callInfo.state == CallInfo::speaking;}
+    Q_INVOKABLE bool isDeveloper() {return developer;}
 
     CallInfo callInfo;
     AudioEngine *audioEngine;
@@ -98,7 +101,7 @@ public:
     void autoAcceptCall();
     void closeCallDialog();
     void sendDataByTcp(const QString &name, QByteArray data, QString targetIp, int port);
-
+    void setRemoteMicLevel (int level);
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);

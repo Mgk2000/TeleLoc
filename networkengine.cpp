@@ -17,6 +17,7 @@
 #include <QGuiApplication>
 bool developer = false;
 bool isTablet = false;
+bool remoteControl = false;
 NetworkEngine * netEngine;
 NetworkEngine::NetworkEngine(QObject *parent)
     : QObject(parent), tcpClientSocket(nullptr) {
@@ -115,6 +116,7 @@ void NetworkEngine::sendDataByTcp(const QString &name, QByteArray data, QString 
 
     QObject::connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
     socket->connectToHost(targetIp, port);
+    qWarning() << "@@@call Send call by TCP to" << name <<targetIp << port;
 
     if (socket->waitForConnected(3000)) {
         // Форматируем данные так же, как их ждет Java-сервис
@@ -123,11 +125,21 @@ void NetworkEngine::sendDataByTcp(const QString &name, QByteArray data, QString 
         socket->write(data);
         socket->flush();
         socket->disconnectFromHost();
-        qWarning() << "@@@call Send call by TCP to" << name <<targetIp << port;
     } else {
         qDebug() << "@@@call Ошибка вызова по TCP:" << socket->errorString();
         socket->deleteLater();
     }
+}
+
+void NetworkEngine::setRemoteMicLevel(int level)
+{
+    QJsonObject obj;
+    obj["type"] = "mic_level";
+    obj["level"] = level;
+    QByteArray ba = QJsonDocument(obj).toJson();
+    sendTCP(QString::fromUtf8(ba));
+    qDebug() << "@@@sound setremotemic" << level;
+    qDebug() << "@@@sound" << ba;
 }
 
 void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
@@ -145,7 +157,12 @@ void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
             break;
         }
     qDebug() << "@@@call Calling" << name << targetIp;
-    int port = 28501;
+    int port;
+    switch (netType)
+    {
+    case 2: port = 45454; break;
+    default: port = 28501;
+    }
     sendDataByTcp(name, data, targetIp, port);
 }
 QString NetworkEngine::getIpByName(const QString &name, int netType)
@@ -210,7 +227,6 @@ QStringList NetworkEngine::getUsers(int netType) {
     return list;
 }
 void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString &senderIpStr) {
-#ifndef Q_OS_ANDROID1
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
 
@@ -222,6 +238,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     QString name = obj["name"].toString();
     if (name == m_users[0].name)
         return;
+    if (type != "discovery")
     qDebug() << "@@@exc parse type=" << type << "name=" << name;
     if (type == "incoming_call") {
         qDebug() << "@@@exc incomingCall state=" << callInfo.state << QString(data);
@@ -296,11 +313,27 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Останавливаем запись Получателя.";
         audioEngine->stopWriteToFile();
     }
-#endif
+    else if (type[0] == '{')
+    {
+        QJsonDocument doc = QJsonDocument::fromJson(type.toUtf8());
+        qDebug () << "@@@exc doc=" << doc;
+        if (!doc.isNull())
+        {
+            QJsonObject obj = doc.object();
+            qDebug () << "@@@exc obj=" << obj;
+            if (obj["type"] == "mic_level")
+            {
+                int level= obj["level"].toInt();
+                qDebug() << "@@@exc mic_level from remote" << level;
+                audioEngine->setMicLevel(level);
+            }
+        }
+    }
     qDebug() << "@@@incoming exit from parse";
 }
 void NetworkEngine::startAudioCall(const QString &name, int netType) {
-    qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() для:" << name;
+    audioEngine->initConfigLevels();
+    qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() для:" << name <<"netType=" << netType;
     setCallingState(CallInfo::outCalling);
     if (name != "Анфиса")
     {
@@ -657,6 +690,7 @@ void NetworkEngine::incomingCall()
     qDebug() << "@@@incomingCall incomingCall Busy=" << callInfo.busy() << callInfo.ip ;
     if (callInfo.busy())
         return;
+    setAndroidAbsoluteSpeakerVolume(50);
     m_incomingRing->play();
     setCallingState(CallInfo::inCalling);
 
@@ -675,7 +709,7 @@ void NetworkEngine::incomingCall()
             autoAcceptCall();
         });
     }
-
+    audioEngine->initConfigLevels();
 }
 
 void NetworkEngine::reject(const QString &ip)
@@ -889,7 +923,7 @@ void NetworkEngine::onNewConnection() {
 }
 
 void NetworkEngine::onReadyTcpRead() {
-    //qDebug() << "@@@exc NetworkEngine::onReadyTcpRead() 1";
+    //qDebug() << "@@@tcp NetworkEngine::onReadyTcpRead() 1";
     QTcpSocket *senderSocket = qobject_cast<QTcpSocket*>(sender());
     if (!senderSocket) return;
     QByteArray data = senderSocket->readAll();
@@ -1153,6 +1187,7 @@ bool NetworkEngine::isUserAndroid(const QString & name) const
 
 void NetworkEngine::autoAcceptCall()
 {
+    return;
     qDebug() << "@@@incomingCall auto accept" << callInfo.name << callInfo.netType;
     acceptAudioCall(callInfo.name,callInfo.netType);
     //emit autoAcceptCall();

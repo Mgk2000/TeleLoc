@@ -22,10 +22,10 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
     property string savedName: "Полосарь"
     property string activeConferencePeers: ""
     property int activeCallNetType: -1
-    property bool developer : netEngine.getDeveloper()
     property int micVolume: 0
     property string callingColor: "#008800"
      property bool chatVisible: false
+     property bool developer: netEngine.isDeveloper()
     ListModel {
         id: chatLogModel
     }
@@ -121,7 +121,7 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
          }
          function onNetVolumeUpdated(volume) {
              if (volume !=0)
-                 console.log("@@@sound qml volume = ", volume)
+                 //console.log("@@@sound qml volume = ", volume)
              netIndicatorText.text = "🔊 " + volume + "%"
          }
          function onStopWritingSound() {
@@ -177,6 +177,15 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
                     onClicked: {
                         savedName = netEngine.getSavedName()
                         settingsDialog.open()
+                    }
+                }
+                CheckBox {
+                    id: remoteCheckbox
+                    checked: false   // флажок отмечен
+                    text: "Remote"
+                    height:50
+                    onCheckedChanged: {
+                        netEngine.setRemoteControl (checked)
                     }
                 }
                 Item {
@@ -973,7 +982,8 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
                 // При клике пользователем меняем свойство в главном окне
                 onCheckedChanged: {
                     developer = checked
-                    netEngine.setDeveloper(developer)
+                    netEngine.setDeveloper(checked)
+                    console.log("@@@QML developer=", developer)
                 }
             }
 

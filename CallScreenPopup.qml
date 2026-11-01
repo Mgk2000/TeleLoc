@@ -106,7 +106,8 @@ Popup {
                     editable: true; stepSize: 5
                     onValueModified: {
                         callScreenPopup.micLevel = value
-                        audioEngine.setMicLevel(value)
+                        audioEngine.setMicLevel(value, true)
+                        color: yellow
                     }
                 }
             }
@@ -136,7 +137,8 @@ Popup {
                     editable: true; stepSize: 5
                     onValueModified: {
                         callScreenPopup.speakerLevel = value
-                        audioEngine.setSpeakerLevel(value)
+                        audioEngine.setSpeakerLevel(value, true)
+                        color: yellow
                     }
                 }
             }
@@ -303,7 +305,8 @@ Popup {
 
     onOpened: {
         handle.x = (sliderContainer.width - handle.width) / 2;
-
+        console.log("@@@sound Open call diialog")
+        audioEngine.initConfigLevels()
         // Синхронизируем интерфейс с текущими значениями из C++ при открытии окна
         micSpinBox.value = callScreenPopup.micLevel
         speakerSpinBox.value = callScreenPopup.speakerLevel
