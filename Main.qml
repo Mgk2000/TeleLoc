@@ -120,7 +120,7 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
              micIndicatorText.text = "🎤 " + volume + "%"
          }
          function onNetVolumeUpdated(volume) {
-             if (volume !=0)
+             if (volume !==0)
                  //console.log("@@@sound qml volume = ", volume)
              netIndicatorText.text = "🔊 " + volume + "%"
          }
@@ -181,11 +181,34 @@ import QtQuick.Controls 2.15 // Убедитесь, что этот импорт
                 }
                 CheckBox {
                     id: remoteCheckbox
-                    checked: false   // флажок отмечен
+                    checked: false
                     text: "Remote"
                     height:50
                     onCheckedChanged: {
                         netEngine.setRemoteControl (checked)
+                        var m =audioEngine.getMicLevel()
+                        var s = audioEngine.getSpeakerLevel()
+                        var rm = audioEngine.getRemoteMicLevel()
+                        var rs = audioEngine.getRemoteSpeakerLevel()
+                        console.log("@@@QML",m,s,rm,rs)
+                        if (checked) {
+                            //customCallScreen.micLevel = rm
+                            //customCallScreen.speakerLevel = rs
+                            //customCallScreen.speakerSpinBox.valuel = rs
+                            customCallScreen.setSpekVal(rs)
+                            customCallScreen.setMicVal(rm)
+//                            micSpinBox.value = rm
+                        } else {
+                            //customCallScreen.micLevel = m
+                            //customCallScreen.speakerLevel = s
+                            //speakerSpinBox.value = s;
+//                            micSpinBox.value = m
+                            customCallScreen.setSpekVal(s)
+                            customCallScreen.setMicVal(m)
+                        }
+                        //console.log ("@@@QML checked mic speak", checked, CallScreenPopup.micLevel, CallScreenPopup.speakerLevel)
+                        console.log ("@@@QML checked=", checked)
+
                     }
                 }
                 Item {

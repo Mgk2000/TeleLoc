@@ -82,6 +82,8 @@ qt_add_qml_module(appTeleLoc
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocWakeReceiver.java
         RESOURCES qtquickcontrols2.conf
         RESOURCES android/src/org/qtproject/example/appTeleLoc/TeleLocActivity.java
+        QML_FILES SpinButton.qml
+        QML_FILES GreenSpinBox.qml
 )
 
 # Прописываем только ПУБЛИЧНЫЕ заголовочные файлы Opus

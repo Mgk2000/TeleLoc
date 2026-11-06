@@ -269,7 +269,7 @@ public class TeleLocService extends android.app.Service {
                         String type = obj.optString("type");
                         if ("incoming_call".equals(type)) {
                             Log.w(TAG, "@@@tcp listenforcalls incoming_call" + message);
-                            saveCall(obj.optString("name"), obj.optString("ip"), obj.optInt("netType"));
+                            saveCall(obj);
                             triggerFullScreenCall(message);
                             sendToCpp(1,message);
                         }
@@ -393,7 +393,7 @@ private void startUdpReceiver() {
                             updatePeer(pName, pIp, android);
                         }
                     } else if ("incoming_call1".equals(stype)) {
-                        saveCall(pName, pIp, netType);
+                        saveCall(obj);
                         triggerFullScreenCall(message);
                     }
                 } catch (Exception e) {
@@ -567,17 +567,14 @@ private void saveUsers() {
     } catch (Exception e) {}
 }
 
-public void saveCall(String name, String ip, int netType) {
+public void saveCall(org.json.JSONObject obj) {
     try {
-        lastCall = new org.json.JSONObject();
-        lastCall.put("name", name);
-        lastCall.put("ip", ip);
-        lastCall.put("netType", netType);
-        lastCall.put("time", System.currentTimeMillis());
+        lastCall = obj;
         lastCallTime = System.currentTimeMillis();
-        org.json.JSONObject obj = readJsonConfig();
-        obj.put("lastCall", lastCall);
-        saveConfig(obj);
+        lastCall.put("time", lastCallTime);
+        org.json.JSONObject obj1 = readJsonConfig();
+        obj1.put("lastCall", lastCall);
+        saveConfig(obj1);
     } catch (Exception e) {}
 }
 
@@ -640,10 +637,11 @@ void sendToCpp(int num, String message) {
                     obj.put("name", users.get(0).name);
                     break;
                 case 1:
-                    obj.put("type", "incoming_call");
+                    obj = msgobj;
+                /*    obj.put("type", "incoming_call");
                     obj.put("data", message);
                     obj.put("name", msgobj.optString("name"));
-                    obj.put("net_type", msgobj.optString("netType"));
+                    obj.put("net_type", msgobj.optString("netType"));*/
                     break;
                 default: ;
             }

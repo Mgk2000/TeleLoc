@@ -13,6 +13,11 @@
 #include <QTimer>
 #include <QMutex>
 #include <QQueue>
+extern bool m_writeToFile;
+extern int m_savedMicLevel, m_savedSpeakerLevel;
+extern int remoteMicLevel, remoteSpeakerLevel;
+extern int m_maxSpeakerLevel;
+extern int m_micLevel, m_speakerLevel;
 
 // ============================================================================
 // WORKER: Вся тяжелая логика звука, Opus и UDP (выполняется в QThread)
@@ -76,17 +81,15 @@ private:
     QFile m_unixFileReceiverOut;
     int   m_unixSizeReceiverOut = 0;
 
-    bool m_writeToFile = false;
     bool m_isMuted = false;
     bool m_isEchoTestMode = false;
 
-    int m_micLevel = 30;
-    int m_speakerLevel = 30;
     void *m_opusEncoder = nullptr;
     void *m_opusDecoder = nullptr;
 
     float m_x1 = 0.0f, m_x2 = 0.0f;
     float m_y1 = 0.0f, m_y2 = 0.0f;
+    void openFiles();
 };
 
 // ============================================================================
@@ -108,16 +111,22 @@ public:
     Q_INVOKABLE void stopWriteToFile();
     Q_INVOKABLE void setWriteToFile(bool enable);
     bool isWritingToFile() const { return m_writeToFile; }
-    bool writeToFile = false; // Для прямой совместимости с кодом `if (audioEngine->writeToFile)`
 
     Q_INVOKABLE void muteMicrophone(bool mute);
-    Q_INVOKABLE void setMicLevel(int level, bool save = false);
-    Q_INVOKABLE void setSpeakerLevel(int level, bool save = false);
+    Q_INVOKABLE void setMicLevel(int level, bool save = false, bool signal = false);
+    Q_INVOKABLE void setSpeakerLevel(int level, bool save = false, bool signal = false);
 
     Q_INVOKABLE int getMicLevel() { return m_worker->getMicLevel(); }
     Q_INVOKABLE int getSpeakerLevel() { return m_worker->getSpeakerLevel(); }
     Q_INVOKABLE void toggleEchoTest();
     Q_INVOKABLE void initConfigLevels();
+    Q_INVOKABLE int currMicLevel();
+    Q_INVOKABLE int currSpeakerLevel();
+    Q_INVOKABLE int getRemoteMicLevel() const;
+    Q_INVOKABLE void setRemoteMicLevel(int newRemoteMicLevel);
+
+    Q_INVOKABLE int getRemoteSpeakerLevel() const;
+    Q_INVOKABLE void setRemoteSpeakerLevel(int newRemoteSpeakerLevel);
 
 signals:
     void micVolumeUpdated(int volume);
@@ -126,28 +135,29 @@ signals:
     void initSpeakerLevel(int level);
     void stopWritingSound(); // Добавили пропущенный сигнал!
     void writeToFileChanged();
-
+    void remoteSetMicLevel(int);
+    void remoteSetSpeakerLevel(int);
 private:
     void readLevels();
 
     QThread m_workerThread;
     AudioWorker *m_worker = nullptr;
 
-    int m_savedMicLevel, m_savedSpeakerLevel;
-    int m_maxSpeakerLevel;
-    void saveLevels (){m_savedMicLevel = getMicLevel(); m_savedSpeakerLevel = getSpeakerLevel();}
-    void restoreLevels() {setMicLevel(m_savedMicLevel); setSpeakerLevel(m_savedSpeakerLevel);}
+    void saveLevels (){m_savedMicLevel = m_micLevel; m_savedSpeakerLevel = m_speakerLevel;}
+    void restoreLevels() {m_micLevel = m_savedMicLevel; m_speakerLevel = m_savedSpeakerLevel;}
     void saveConfigLevels();
-    bool m_writeToFile = false;
     bool m_isEchoTestMode = false;
     QTimer speakerTimer;
 private slots:
     void onSpeakerTick();
 };
-#include <QJniObject>
-#include <QJniEnvironment>
+
 #include <QtCore/qnativeinterface.h>
 #include <QCoreApplication>
+#ifdef Q_OS_ANDROID
+#include <QJniObject>
+#include <QJniEnvironment>
+#endif
 // ПОЛУЧИТЬ АБСОЛЮТНУЮ ГРОМКОСТЬ ДИНАМИКА (возвращает значение от 0 до Max)
 int getAndroidAbsoluteSpeakerVolume();
 using namespace QNativeInterface;

@@ -109,6 +109,119 @@ NetworkEngine::~NetworkEngine() {
     sendCommandToTeleLocService(2, "");
 #endif
 }
+void NetworkEngine::readConfig(bool readAll) {
+    qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
+    qint64 dt = currMsec - lastReadConfigTime;
+    lastReadConfigTime = currMsec;
+    QString fName = configName();
+    //qDebug() << "@@@configpath CPP=" << configName();
+    QFile file(fName);
+    if (!file.open(QIODevice::ReadOnly) && m_users.isEmpty()) {
+        UserInfo u;
+        u.name ="NewUser";
+        u.ip[0] = "192.168.1.22";
+        m_users << u;
+#ifndef Q_OS_ANDROID
+        saveConfig();
+#endif
+        return;
+    }
+    QByteArray data = file.readAll();
+    file.close();
+    //qDebug() << "@@@ read config " << QString(data);
+    if (dt >=0 && dt <=5000)
+        return;
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (doc.isNull() || !doc.isObject()) {
+        return;
+    }
+    // qDebug() << "@@@ read config 2";
+    QJsonObject rootObj = doc.object();
+    developer = (bool) rootObj["developer"].toInt();
+    //qDebug() << "@@@ read config 3" << rootObj;
+    QJsonArray peersArray = rootObj["peers"].toArray();
+    if (!peersArray.isEmpty())
+    {
+        m_users.clear();
+        for (int i = 0; i < peersArray.size(); ++i) {
+            QJsonObject peerObj = peersArray.at(i).toObject();
+            // qDebug() << "@@@ read config 3.2";
+            UserInfo u;
+            // qDebug() << "@@@ read config 3.4";
+            u.name = peerObj["name"].toString();
+            u.lastPing = peerObj["lastPing"].toInteger();
+#ifdef Q_OS_ANDROID
+            u.android = true;
+#else
+            u.android = false;
+#endif
+            QJsonArray ipArr = peerObj["ip"].toArray();
+            // qDebug() << "@@@ read config 3.5 ipArr=" << ipArr;
+            for (int i =0; i< 3; i++)
+                u.ip[i] = ipArr[i].toString();
+            m_users.append(u);
+            //qDebug() << "@@@ read config 3.6";
+        }
+    }
+    //qDebug() << "@@@ read config 4" ;
+    if (!readAll)
+        return;
+    if(rootObj.contains("lastCall"))
+    {
+        QJsonObject callObj = rootObj["lastCall"].toObject();
+        qint64 msec = callObj["time"].toInteger();
+        qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
+        qint64 dt = (currMsec-msec) /1000;
+        //qDebug() << "@@@Last call" << dt;
+        if (dt >= 0 &&  dt< 30)
+        {
+            pendingCall = true;
+            callInfo.name = callObj["name"].toString();
+            callInfo.netType = callObj["netType"].toInt();
+            QString sip = callObj["ip"].toString();
+            if (sip.isEmpty())
+            {
+                for (int i = 1; i< m_users.count(); i++)
+                    if (m_users[i].name == callInfo.name)
+                        sip = m_users[i].ip[callInfo.netType];
+            }
+            callInfo.ip =  sip;
+            qDebug() << "@@@incomingCall  lastCall=" << callObj;
+            //if (false)
+            QTimer::singleShot(1000, []() {
+                qDebug() << "@@@incomingCall from readConfig";
+                netEngine->incomingCall();
+            });
+        }
+        else {
+            QDateTime tfile, tnow;
+            tfile.setMSecsSinceEpoch(msec);
+            tnow.setMSecsSinceEpoch(msec);
+            qDebug() << "tfile,tnow=" << tfile << tnow;
+
+        }
+    }
+    else
+    {
+        //qDebug() << "@@@  lastCall too old";
+    }
+    //qDebug() << "@@@ read config 5";
+    rootObj.remove("lastCall");
+    //qDebug() << "@@@ read config 6" ;
+    QFile writeFile(fName);
+    if (writeFile.open(QIODevice::WriteOnly)) {
+        QJsonDocument doc(rootObj);
+        writeFile.write(doc.toJson(QJsonDocument::Compact));
+        writeFile.close();
+    }
+    else {
+        qDebug() << "@@@  lastCall=0";
+    }
+    emit peerListChanged();
+    // qDebug() << "@@@ read config exit";
+
+}
+
 void NetworkEngine::sendDataByTcp(const QString &name, QByteArray data, QString targetIp, int port)
 {
     QTcpSocket *socket = new QTcpSocket();
@@ -136,10 +249,22 @@ void NetworkEngine::setRemoteMicLevel(int level)
     QJsonObject obj;
     obj["type"] = "mic_level";
     obj["level"] = level;
-    QByteArray ba = QJsonDocument(obj).toJson();
-    sendTCP(QString::fromUtf8(ba));
+    sendTCP(obj);
     qDebug() << "@@@sound setremotemic" << level;
-    qDebug() << "@@@sound" << ba;
+    qDebug() << "@@@sound" << obj;
+}
+
+void NetworkEngine::setRemoteSpeakerLevel(int level)
+{
+    if (level == 0)
+        qCritical() <<  "@@@sound setRemoteSpeakerLevel 0000000000000000";
+    QJsonObject obj;
+    obj["type"] = "speaker_level";
+    obj["level"] = level;
+    sendTCP(obj);
+    qDebug() << "@@@sound setremoteSpeaker" << level;
+    qDebug() << "@@@sound" << obj;
+
 }
 
 void NetworkEngine::sendCallByTcp(const QString &name, int netType) {
@@ -238,13 +363,16 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     QString name = obj["name"].toString();
     if (name == m_users[0].name)
         return;
-    if (type != "discovery")
-    qDebug() << "@@@exc parse type=" << type << "name=" << name;
+    if (type != "discovery"){
+    qWarning() << "@@@exc parse type=" << type << "name=" << name;
+        qWarning() << obj;
+    }
     if (type == "incoming_call") {
         qDebug() << "@@@exc incomingCall state=" << callInfo.state << QString(data);
         if (callInfo.busy())
         {
-            rejectBusy(senderIpStr);
+            if (name != callInfo.name)
+                rejectBusy(senderIpStr);
             return;
         }
         callInfo.netType = obj["net_type"].toInt();
@@ -254,19 +382,26 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
             callInfo.ip.remove("::ffff:");
 
         callInfo.name = name;
-        if (obj.contains("write"))
-            audioEngine->setWriteToFile(true);
-        qDebug() << "@@@incomingCall from parse";
+        callInfo.micLevel = obj["mic_level"].toInt(50);
+        callInfo.speakerLevel = obj["speaker_level"].toInt(50);
+        bool wr = obj.contains("write");
+        audioEngine->setWriteToFile(wr);
+        qDebug() << "@@@sound incomingCall from parse write=" << wr;
         incomingCall();
     }
     else if (type == "accept_call") {
-        qDebug() << "@@@incomingCall from parse accept_call";
+        qDebug() << "@@@exc from parse accept_call";
         m_ringbackTone->stop();
         setCallingState(CallInfo::speaking);
         bool android = m_users[0].android && isUserAndroid(name);
         callInfo.useOpus = android;
         audioEngine->startRecording(callInfo.ip);
+        int ml = obj["mic_level"].toInt();
+        int sl = obj["speaker_level"].toInt();
+        qDebug() << "@@@sound incomingCall from parse accept_call mic=" << ml << "speak=" << sl;;
         emit callAccepted();
+        audioEngine->setRemoteMicLevel(ml);
+        audioEngine->setRemoteSpeakerLevel(sl);
     }
     else if (type == "line_busy") {
         qDebug() << "@@@incomingCall from parse busy";
@@ -283,6 +418,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
             emit callStopped();
     }
     else if (type == "stop_call") {
+        qWarning() << "@@@parse stop_call" << name << callInfo.name;
         if (name != callInfo.name)
             return;
         qDebug() << "@@@incomingCall from parse stop_call";
@@ -313,19 +449,38 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Останавливаем запись Получателя.";
         audioEngine->stopWriteToFile();
     }
+    else if (type == "mic_level")
+    {
+        int level= obj["level"].toInt();
+        qDebug() << "@@@exc mic_level from remote" << level;
+        audioEngine->setMicLevel(level, true, true);
+    }
+    else if (type == "speaker_level")
+    {
+        int level= obj["level"].toInt();
+        qDebug() << "@@@exc mic_level from remote" << level;
+        audioEngine->setSpeakerLevel(level, true, true);
+    }
     else if (type[0] == '{')
     {
         QJsonDocument doc = QJsonDocument::fromJson(type.toUtf8());
-        qDebug () << "@@@exc doc=" << doc;
+        qCritical() << "@@@exc {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{doc=" << doc;
         if (!doc.isNull())
         {
+            type = obj["type"].toString();
             QJsonObject obj = doc.object();
             qDebug () << "@@@exc obj=" << obj;
-            if (obj["type"] == "mic_level")
+            if (type == "mic_level")
             {
                 int level= obj["level"].toInt();
                 qDebug() << "@@@exc mic_level from remote" << level;
-                audioEngine->setMicLevel(level);
+                audioEngine->setMicLevel(level, true, true);
+            }
+            else if (type == "speaker_level")
+            {
+                int level= obj["level"].toInt();
+                qDebug() << "@@@exc mic_level from remote" << level;
+                audioEngine->setSpeakerLevel(level, true, true);
             }
         }
     }
@@ -360,8 +515,8 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
         return;
     }
 
-    callInfo.ip = targetIp;
 //    m_activeCallNetType = netType;
+    callInfo.ip = targetIp;
 
     QJsonObject obj;
     obj["type"] = "incoming_call";
@@ -370,7 +525,8 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
     obj["callerIp"] = m_users[0].ip[netType];
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n";
     qDebug() << "@@@ СЕТЬ C++: Вызов startAudioCall() 3 для:" << name;
-
+    obj["mic_level"] = audioEngine->getMicLevel();
+    obj["speaker_level"] = audioEngine->getSpeakerLevel();
     tcpSocket->abort();
    // bool connected = false;
     m_ringbackTone->play();
@@ -383,6 +539,9 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     QJsonObject obj;
     obj["type"] = "accept_call";
     obj["name"] = me.name;
+    obj["mic_level"] = audioEngine->getMicLevel();
+    obj["speaker_level"] = audioEngine->getSpeakerLevel();
+
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
 
@@ -394,6 +553,7 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     tcpSocket->abort();
     bindSocketToWiFi(tcpSocket, callInfo.netType);
     qDebug() << "@@@tcp connect to 28000 1";
+    qWarning() << data;
     tcpSocket->connectToHost(callInfo.ip, PORT);
     if (tcpSocket->waitForConnected(1200)) {
         tcpSocket->write(data);
@@ -404,28 +564,27 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     qDebug() << "@@@incomingCall accept ip=" << callInfo.ip;
     bool android = m_users[0].android && isUserAndroid(targetPeerName);
     callInfo.useOpus = android;
-
+    audioEngine->setRemoteMicLevel(callInfo.micLevel);
+    audioEngine->setRemoteSpeakerLevel(callInfo.speakerLevel);
     audioEngine->startRecording(callInfo.ip);
 }
-void NetworkEngine::sendTCP(const QString& command)
+void NetworkEngine::sendTCP(const QJsonObject &obj)
 {
     if (m_users.isEmpty()) return;
     UserInfo me = m_users.at(0);
-    QJsonObject obj;
-    obj["type"] = command;
-    obj["name"] = me.name;
-    QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
     QString targetIp = callInfo.ip;
     if (targetIp.startsWith("::ffff:")) {
         targetIp.remove("::ffff:");
     }
+    QJsonDocument doc(obj);
+    QByteArray data = doc.toJson(QJsonDocument::Compact);
     qDebug() << "@@@sendtcp 1 ip=" << targetIp << "data=" << data;
     if (!targetIp.isEmpty() && tcpSocket) {
         qDebug() << "@@@sendtcp 2 ip=" << targetIp << "data=" << data;
         tcpSocket->abort();
         qDebug() << "@@@sendtcp 3 ip=" << targetIp << "data=" << data;
-        qDebug() << "@@@tcp connect to 28000 1";
+        qDebug() << "@@@tcp connect to 28000 2";
         bindSocketToWiFi(tcpSocket, callInfo.netType);
         tcpSocket->connectToHost(targetIp, PORT);
         qDebug() << "@@@sendtcp 4 ip=" << targetIp << "data=" << data;
@@ -483,116 +642,7 @@ QString configName()
     return fName;
 }
 
-void NetworkEngine::readConfig(bool checkLastCall) {
-    qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
-    qint64 dt = currMsec - lastReadConfigTime;
-    lastReadConfigTime = currMsec;
-    QString fName = configName();
-    //qDebug() << "@@@configpath CPP=" << configName();
-    QFile file(fName);
-    if (!file.open(QIODevice::ReadOnly) && m_users.isEmpty()) {
-        UserInfo u;
-        u.name ="NewUser";
-        u.ip[0] = "192.168.1.22";
-        m_users << u;
-#ifndef Q_OS_ANDROID
-        saveConfig();
-#endif
-        return;
-    }
-    QByteArray data = file.readAll();
-    file.close();
-    //qDebug() << "@@@ read config " << QString(data);
-    if (dt >=0 && dt <=5000)
-        return;
-    QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (doc.isNull() || !doc.isObject()) {
-        return;
-    }
-   // qDebug() << "@@@ read config 2";
-    QJsonObject rootObj = doc.object();
-    developer = (bool) rootObj["developer"].toInt();
-    //qDebug() << "@@@ read config 3" << rootObj;
-    QJsonArray peersArray = rootObj["peers"].toArray();
-    if (!peersArray.isEmpty())
-    {
-        m_users.clear();
-    for (int i = 0; i < peersArray.size(); ++i) {
-        QJsonObject peerObj = peersArray.at(i).toObject();
-       // qDebug() << "@@@ read config 3.2";
-        UserInfo u;
-       // qDebug() << "@@@ read config 3.4";
-        u.name = peerObj["name"].toString();
-        u.lastPing = peerObj["lastPing"].toInteger();
-#ifdef Q_OS_ANDROID
-        u.android = true;
-#else
-        u.android = false;
-#endif
-        QJsonArray ipArr = peerObj["ip"].toArray();
-       // qDebug() << "@@@ read config 3.5 ipArr=" << ipArr;
-        for (int i =0; i< 3; i++)
-              u.ip[i] = ipArr[i].toString();
-        m_users.append(u);
-        //qDebug() << "@@@ read config 3.6";
-        }
-    }
-    //qDebug() << "@@@ read config 4" ;
-    if (checkLastCall && rootObj.contains("lastCall"))
-        {
-        QJsonObject callObj = rootObj["lastCall"].toObject();
-        qint64 msec = callObj["time"].toInteger();
-        qint64 currMsec = QDateTime::currentMSecsSinceEpoch();
-        qint64 dt = (currMsec-msec) /1000;
-        //qDebug() << "@@@Last call" << dt;
-        if (dt >= 0 &&  dt< 30)
-        {
-        pendingCall = true;
-        callInfo.name = callObj["name"].toString();
-        callInfo.netType = callObj["netType"].toInt();
-        QString sip = callObj["ip"].toString();
-        if (sip.isEmpty())
-        {
-            for (int i = 1; i< m_users.count(); i++)
-                if (m_users[i].name == callInfo.name)
-                    sip = m_users[i].ip[callInfo.netType];
-        }
-        callInfo.ip =  sip;
-        qDebug() << "@@@incomingCall  lastCall=" << callObj;
-        //if (false)
-        QTimer::singleShot(1000, []() {
-            qDebug() << "@@@incomingCall from readConfig";
-            netEngine->incomingCall();
-        });
-        }
-        else {
-            QDateTime tfile, tnow;
-            tfile.setMSecsSinceEpoch(msec);
-            tnow.setMSecsSinceEpoch(msec);
-            qDebug() << "tfile,tnow=" << tfile << tnow;
 
-        }
-        }
-        else
-        {
-            //qDebug() << "@@@  lastCall too old";
-        }
-        //qDebug() << "@@@ read config 5";
-        rootObj.remove("lastCall");
-        //qDebug() << "@@@ read config 6" ;
-        QFile writeFile(fName);
-        if (writeFile.open(QIODevice::WriteOnly)) {
-            QJsonDocument doc(rootObj);
-            writeFile.write(doc.toJson(QJsonDocument::Compact));
-            writeFile.close();
-        }
-    else {
-        qDebug() << "@@@  lastCall=0";
-    }
-    emit peerListChanged();
-   // qDebug() << "@@@ read config exit";
-
-}
 #ifndef Q_OS_ANDROID
 void NetworkEngine::saveConfig()
 {
@@ -728,7 +778,7 @@ void NetworkEngine::rejectBusy(const QString &ip)
     } else if (tcpSocket && tcpSocket->state() == QAbstractSocket::ConnectedState) {
         tcpSocket->write(busyData);
     }*/
-    qDebug() << "@@@tcp connect to 28000 1";
+    qDebug() << "@@@tcp connect to 28000 4";
     QTcpSocket * busySocket = new QTcpSocket;
     busySocket->deleteLater();
     busySocket->connectToHost(ip, PORT);
@@ -817,7 +867,7 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
             for (int i = 1; i < m_users.size(); ++i) {
                 if (m_users[i].isAlive() && !m_users[i].ip[2].isEmpty()) {
                     QTcpSocket tmpSocket;
-                    qDebug() << "@@@tcp connect to 28000 4";
+                    qDebug() << "@@@tcp connect to 28000 5";
 
                     tmpSocket.connectToHost(m_users[i].ip[2], PORT);
                     if (tmpSocket.waitForConnected(500)) {
@@ -840,7 +890,7 @@ void NetworkEngine::sendMessage(const QString &targetPeer, const QString &text) 
     }
     if (!targetIp.isEmpty()) {
         QTcpSocket tmpSocket;
-        qDebug() << "@@@tcp connect to 28000 5";
+        qDebug() << "@@@tcp connect to 28000 6";
 
         tmpSocket.connectToHost(targetIp, PORT);
         if (tmpSocket.waitForConnected(1000)) {
@@ -857,7 +907,7 @@ QByteArray NetworkEngine::getCallData(int netType)
     obj["name"] = me.name;
     obj["netType"] = netType;
     obj["ip"] = me.ip[netType];
-    if (audioEngine->writeToFile)
+    if (audioEngine->isWritingToFile())
         obj["write"] = 1;
     QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
@@ -930,13 +980,13 @@ void NetworkEngine::onReadyTcpRead() {
     if (QString(data).contains(("incoming_call"))) {
         qDebug() << "@@@exc parse onReadyTcpRead() 2" << QString(data)
              << "port=" << senderSocket->localPort();
-        QJsonObject dataObj = QJsonDocument::fromJson(data).object();
+        /*QJsonObject dataObj = QJsonDocument::fromJson(data).object();
         QJsonObject obj;
         obj["type"] = "incoming_call";
         obj["name"] = dataObj["name"];
         obj["net_type"] = dataObj["net_type"];
         QJsonDocument doc(obj);
-        data = doc.toJson(QJsonDocument::Compact);
+        data = doc.toJson(QJsonDocument::Compact);*/
         qDebug() << "@@@exc data=" << QString(data);
     }
 
@@ -1028,6 +1078,9 @@ void NetworkEngine::m_unixSendAlivePing() {
 //        qDebug() << "@@@ [NetworkEngine] Отправлен Unix-пинг: ALIVE";
     }
 }
+
+
+
 
 void NetworkEngine::configFromString(const QString &sconf)
 {
@@ -1163,8 +1216,11 @@ void NetworkEngine::masterStartRecording()
     // 1. Включаем запись у себя (мы — отправитель)
     audioEngine->setWriteToFile(true);
     // 2. Отправляем команду по TCP удалённой стороне на порт 28000
-    if (callInfo.state == CallInfo::speaking)
-    sendTCP("start_audio_recording");
+    if (callInfo.state == CallInfo::speaking){
+        QJsonObject obj;
+        obj["type"] = "start_audio_recording";
+        sendTCP(obj);
+    }
 }
 
 void NetworkEngine::masterStopRecording()
@@ -1175,7 +1231,9 @@ void NetworkEngine::masterStopRecording()
     audioEngine->setWriteToFile(false);
 
     // 2. Отправляем стоп-команду по TCP
-        sendTCP("stop_audio_recording");
+    QJsonObject obj;
+    obj["type"] = "stop_audio_recording";
+    sendTCP(obj);
 }
 bool NetworkEngine::isUserAndroid(const QString & name) const
 {
@@ -1187,7 +1245,7 @@ bool NetworkEngine::isUserAndroid(const QString & name) const
 
 void NetworkEngine::autoAcceptCall()
 {
-    return;
+    //return;
     qDebug() << "@@@incomingCall auto accept" << callInfo.name << callInfo.netType;
     acceptAudioCall(callInfo.name,callInfo.netType);
     //emit autoAcceptCall();

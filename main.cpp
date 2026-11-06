@@ -50,8 +50,62 @@ void applyOrientationBasedOnDeviceType() {
     activity.callMethod<void>("setRequestedOrientation", "(I)V", requestedOrientation);
 #endif
 }
+#include <QGuiApplication>
+#include <QtGlobal>
+
+// 1. Создаем кастомный обработчик логов
+void myMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    // Если в сообщении есть этот раздражающий текст — просто игнорируем его
+    if (msg.contains(QLatin1String("attributionTag")) || msg.contains(QLatin1String("AudioRepeatStartStopCheck"))) {
+        return;
+    }
+
+    // Все остальные логи пропускаем дальше по стандартному пути
+    QByteArray localMsg = msg.toLocal8Bit();
+    switch (type) {
+    case QtDebugMsg:
+        fprintf(stderr, "Debug: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+        break;
+    //case QtInfoMsg:
+   //     fprintf(stderr, "Info: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+    //    break;
+    case QtWarningMsg:
+        fprintf(stderr, "Warning: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+        break;
+    case QtCriticalMsg:
+        fprintf(stderr, "Critical: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+        break;
+    case QtFatalMsg:
+        fprintf(stderr, "Fatal: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
+        abort();
+    }
+}
+#if 0
+.int main(int argc, char *argv[])
+{
+    // 2. Регистрируем обработчик в самой первой строчке main()
+    qInstallMessageHandler(myMessageHandler);
+
+    // Принудительно включаем современный бэкэнд AAudio вместо OpenSL ES (из лога видно, что сейчас у вас OpenSL ES)
+    // Это само по себе может снизить количество аномалий вроде AudioRepeatStartStopCheck
+    qputenv("QT_ANDROID_AUDIO_BACKEND", "aaudio");
+
+    QGuiApplication app(argc, argv);
+
+    // ... ваш остальной код приложения ...
+    return app.exec();
+}
+#endif
 int main(int argc, char *argv[])
 {
+    // 2. Регистрируем обработчик в самой первой строчке main()
+    //qInstallMessageHandler(myMessageHandler);
+
+    // Принудительно включаем современный бэкэнд AAudio вместо OpenSL ES (из лога видно, что сейчас у вас OpenSL ES)
+    // Это само по себе может снизить количество аномалий вроде AudioRepeatStartStopCheck
+    //qputenv("QT_ANDROID_AUDIO_BACKEND", "aaudio");
+
     qDebug() << "@@@ main.cpp TeleLoc Started";
 #ifdef WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -62,7 +116,7 @@ int main(int argc, char *argv[])
     qputenv("QT_ANDROID_DISABLE_ACCESSIBILITY", "1");
 
     QGuiApplication app(argc, argv);
-    //QQuickStyle::setStyle("Basic");
+    QQuickStyle::setStyle("Fusion");
 #ifdef Q_OS_ANDROID
     qDebug() << "@@@ TeleLoc started";
     applyOrientationBasedOnDeviceType();

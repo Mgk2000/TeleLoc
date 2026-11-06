@@ -36,6 +36,7 @@ struct CallInfo {
     qint64 time;
     State state = idle;
     bool useOpus = true;
+    int micLevel, speakerLevel;
     void setState(State _state);
     bool busy() const {
         return state != idle;
@@ -92,7 +93,7 @@ public:
     Q_INVOKABLE void masterStartRecording();
     Q_INVOKABLE void masterStopRecording();
 
-    void sendTCP(const QString &command);
+    void sendTCP(const QJsonObject &obj);
     void configFromString(const QString & sconf);
     void setUsersModel(UsersModel* _model)
         {usersModel = _model;}
@@ -102,6 +103,7 @@ public:
     void closeCallDialog();
     void sendDataByTcp(const QString &name, QByteArray data, QString targetIp, int port);
     void setRemoteMicLevel (int level);
+    void setRemoteSpeakerLevel(int level);
 signals:
     void peerListChanged();
     void messageReceived(const QString &fromIp, const QString &message);
@@ -131,7 +133,7 @@ private slots:
 
 #endif
 private:
-    void readConfig(bool checkLastCall);
+    void readConfig(bool readAll);
     void savePeersToConfig();
     QTcpServer *tcpServer;
     QTcpSocket *tcpSocket;

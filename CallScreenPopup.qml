@@ -14,16 +14,38 @@ Popup {
     // Позиционируем в левый верхний угол overlay-слоя
     x: 0
     y:  developer ? 150 : 0
-
+    function setSpekVal ( val) {
+        speakerSpinBox.value = val
+        speakerLevel = val
+    }
+    function setMicVal ( val) {
+        micSpinBox.value = val
+        micLevel = val
+    }
     parent: Overlay.overlay
+    property int micLevel
+     property int speakerLevel
 
     property string callerName: ""
     property int callNetType: -1
     property bool isIncoming: true
 
     // --- НАСТРОЙКИ УРОВНЯ ЗВУКА ДЛЯ ОТЛАДКИ ---
-    property int micLevel: 50
-    property int speakerLevel: 70
+
+    Connections {
+        target: audioEngine
+        function onRemoteSetMicLevel(level){
+            console.log("@@@sound QML RemoteSetMicLevel ", level)
+            micLevel = level
+            //micSpinBox.setvalue(level)
+        }
+        function onRemoteSetSpeakerLevel(level){
+            console.log("@@@sound QML RemoteSetMicLevel ", level)
+            speakerLevel = level
+            //micSpinBox.setvalue(level)
+        }
+
+    }
 
     background: Rectangle {
         color: "#0a2f1d" // Глубокий темно-зеленый
@@ -99,18 +121,18 @@ Popup {
                     font.pixelSize: 12
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
-                SpinBox {
+                GreenSpinBox {
                     id: micSpinBox
-                    width: 90
-                    from: 0; to: 100; value: callScreenPopup.micLevel
+                    // width и height подтянутся из шаблона (90x40), но их можно переписать здесь при желании
+
+                    from: 0; to: 100; value: micLevel
                     editable: true; stepSize: 5
+
                     onValueModified: {
-                        callScreenPopup.micLevel = value
+                        micLevel = value
                         audioEngine.setMicLevel(value, true)
-                        color: yellow
                     }
-                }
-            }
+                }            }
         }
 
         // --- РЕГУЛЯТОР ДИНАМИКОВ + ИНДИКАТОР ---
@@ -130,15 +152,16 @@ Popup {
                     font.pixelSize: 12
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
-                SpinBox {
+                GreenSpinBox {
                     id: speakerSpinBox
-                    width: 90
-                    from: 0; to: 100; value: callScreenPopup.speakerLevel
+                    // width и height подтянутся из шаблона (90x40), но их можно переписать здесь при желании
+
+                    from: 0; to: 100; value: micLevel
                     editable: true; stepSize: 5
+
                     onValueModified: {
                         callScreenPopup.speakerLevel = value
                         audioEngine.setSpeakerLevel(value, true)
-                        color: yellow
                     }
                 }
             }
@@ -310,5 +333,10 @@ Popup {
         // Синхронизируем интерфейс с текущими значениями из C++ при открытии окна
         micSpinBox.value = callScreenPopup.micLevel
         speakerSpinBox.value = callScreenPopup.speakerLevel
+        remoteCheckbox.checked = false
+    }
+    onClosed: {
+        remoteCheckbox.checked = false
+
     }
 }
