@@ -35,6 +35,7 @@ if(WIN32 AND MINGW)
     set(OPUS_X86_PRESUME_AVX2 OFF CACHE BOOL "Disable AVX2 for MinGW compatibility" FORCE)
 endif()
 
+# Добавляем локальную поддиректорию Opus
 add_subdirectory(opus)
 
 # --- ИСПРАВЛЕНИЕ ДЛЯ WINDOWS MINGW 64-BIT (Применяется строго после add_subdirectory) ---
@@ -57,6 +58,20 @@ if(WIN32 AND MINGW)
     add_compile_options(-mstackrealign)
 endif()
 # ---------------------------------------------------------------------------------------
+
+# --- ПОДКЛЮЧЕНИЕ GOOGLE OBOE ДЛЯ ANDROID (ЛОКАЛЬНАЯ ПОДДИРЕКТОРИЯ) ---
+if(ANDROID)
+    message(STATUS "[TeleLoc] Подключение локальной библиотеки Google Oboe для аудиосвязи")
+
+    # Отключаем сборку встроенных тестов и примеров самого Oboe
+    set(OBOE_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(OBOE_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+    # Добавляем локальную папку oboe, скачанную в корень проекта
+    add_subdirectory(oboe)
+endif()
+# ---------------------------------------------------------------------------------------
+
 qt_add_executable(appTeleLoc
     main.cpp
     networkengine.h
@@ -64,10 +79,12 @@ qt_add_executable(appTeleLoc
     audioengine.h
     audioengine.cpp
 )
+
 set_target_properties(appTeleLoc PROPERTIES
     QT_QML_LINT_ARGUMENTS "--quiet"
 )
 set(QT_NO_CREATE_QML_LINT_TARGETS ON)
+
 qt_add_qml_module(appTeleLoc
     URI TeleLoc
     VERSION 1.0
@@ -91,6 +108,13 @@ target_include_directories(appTeleLoc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/opus/include
 )
 
+# Указываем путь к локальным инклюдам Oboe при сборке под Android
+if(ANDROID)
+    target_include_directories(appTeleLoc PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/oboe/include
+    )
+endif()
+
 target_link_libraries(appTeleLoc PRIVATE
     Qt6::Core
     Qt6::Gui
@@ -101,6 +125,13 @@ target_link_libraries(appTeleLoc PRIVATE
     Qt6::Multimedia
     opus
 )
+
+# Линкуем скомпилированную Oboe под Android target
+if(ANDROID)
+    target_link_libraries(appTeleLoc PRIVATE
+        oboe
+    )
+endif()
 
 if(WIN32)
     target_compile_definitions(appTeleLoc PRIVATE WIN32)

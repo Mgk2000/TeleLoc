@@ -4,8 +4,6 @@
 #include <QObject>
 #include <QThread>
 #include <QUdpSocket>
-#include <QAudioSource>
-#include <QAudioSink>
 #include <QMediaDevices>
 #include <QIODevice>
 #include <QByteArray>
@@ -13,6 +11,16 @@
 #include <QTimer>
 #include <QMutex>
 #include <QQueue>
+
+// Подключаем Oboe (только для Android)
+#ifdef Q_OS_ANDROID
+#include <oboe/Oboe.h>
+#else
+// Оставляем Qt Multimedia для десктоп-версии (удобно для тестов)
+#include <QAudioSource>
+#include <QAudioSink>
+#endif
+
 extern bool m_writeToFile;
 extern int m_savedMicLevel, m_savedSpeakerLevel;
 extern int remoteMicLevel, remoteSpeakerLevel;
@@ -20,9 +28,13 @@ extern int m_maxSpeakerLevel;
 extern int m_micLevel, m_speakerLevel;
 
 // ============================================================================
-// WORKER: Вся тяжелая логика звука, Opus и UDP (выполняется в QThread)
+// WORKER: Вся тяжелая логика звука, Opus, UDP и Oboe Callbacks
 // ============================================================================
 class AudioWorker : public QObject
+#ifdef Q_OS_ANDROID
+    , public oboe::AudioStreamDataCallback
+    , public oboe::AudioStreamErrorCallback
+#endif
 {
     Q_OBJECT
 public:
@@ -44,31 +56,61 @@ public:
     void setMicLevel (int l) {m_micLevel = l;}
     void setSpeakerLevel(int l) {m_speakerLevel = l;}
     bool isRunning();
+
+#ifdef Q_OS_ANDROID
+    // --- Интерфейсы Oboe ---
+    // Вызывается в отдельном высокоприоритетном потоке Android, когда готовы данные микрофона или нужен буфер для динамика
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream *audioStream, void *audioData, int32_t numFrames) override;
+    // Вызывается, если отключили наушники, изменился аудио-тракт и т.д.
+    void onErrorAfterClose(oboe::AudioStream *audioStream, oboe::Result error) override;
+#endif
+
 signals:
     void micVolumeMeasured(int volume);
     void speakerVolumeMeasured(int volume);
 
 private slots:
     void onReadyReadUdp();
+    // Избавляемся от QTimer и readyRead() для микрофона на Android, Oboe пушит данные сам через onAudioReady
+#if !defined(Q_OS_ANDROID)
     void onMicDataReady();
     void processPlayback();
+#endif
 
 private:
     void writeWavHeader(QFile &file, int dataSize);
     void applyFilters(short *samples, int count);
     void initOpus();
     void freeOpus();
+    void openFiles();
 
     QUdpSocket *m_udpReceiver = nullptr;
     QUdpSocket *m_udpSender = nullptr;
     QString m_targetIp;
 
+#ifdef Q_OS_ANDROID
+    // Ссылки на потоки Oboe
+    oboe::ManagedStream m_recordingStream;
+    oboe::ManagedStream m_playbackStream;
+    int32_t m_androidSessionId = 0;
+private:
+    // ... ваши существующие переменные (сокеты, файлы, Opus кодеки) ...
+
+    // Добавляем постоянные буферы и флаги на уровень класса
+    QByteArray m_localCaptureBuffer;
+    QByteArray m_localPlaybackBuffer;
+    QByteArray m_lastValidBackupFrame;
+    bool m_isPlaybackActive = false;
+
+#else
+    // Сохраняем Qt Multimedia для Windows/Linux сборок
     QAudioSource *m_audioSource = nullptr;
     QAudioSink *m_audioSink = nullptr;
     QIODevice *m_audioInputDevice = nullptr;
     QIODevice *m_audioOutputDevice = nullptr;
-
     QTimer *m_playbackTimer = nullptr;
+#endif
+
     QQueue<QByteArray> m_jitterBuffer;
     QMutex m_bufferMutex;
     int m_minJitterPackets = 3;
@@ -90,7 +132,6 @@ private:
 
     float m_x1 = 0.0f, m_x2 = 0.0f;
     float m_y1 = 0.0f, m_y2 = 0.0f;
-    void openFiles();
 };
 
 // ============================================================================
@@ -107,7 +148,6 @@ public:
     Q_INVOKABLE void startRecording(const QString &targetIp);
     Q_INVOKABLE void stop();
 
-    // Методы для обратной совместимости с вашим NetworkEngine
     Q_INVOKABLE void startWriteToFile();
     Q_INVOKABLE void stopWriteToFile();
     Q_INVOKABLE void setWriteToFile(bool enable);
@@ -134,7 +174,7 @@ signals:
     void netVolumeUpdated(int volume);
     void initMicLevel(int level);
     void initSpeakerLevel(int level);
-    void stopWritingSound(); // Добавили пропущенный сигнал!
+    void stopWritingSound();
     void writeToFileChanged();
     void remoteSetMicLevel(int);
     void remoteSetSpeakerLevel(int);
@@ -158,14 +198,13 @@ private slots:
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QJniEnvironment>
+#include <QAudioSource>
+#include <QAudioSink>
 #endif
-// ПОЛУЧИТЬ АБСОЛЮТНУЮ ГРОМКОСТЬ ДИНАМИКА (возвращает значение от 0 до Max)
+
 int getAndroidAbsoluteSpeakerVolume();
 using namespace QNativeInterface;
-// УСТАНОВИТЬ АБСОЛЮТНУЮ ГРОМКОСТЬ ДИНАМИКА (принимает значение от 0 до Max)
 void setAndroidAbsoluteSpeakerVolume(int volume);
-
-// ПОЛУЧИТЬ МАКСИМАЛЬНЫЙ ПРЕДЕЛ ГРОМКОСТИ УСТРОЙСТВА (обычно на Poco это 15 шагов)
 int getAndroidMaxSpeakerVolume();
 void setAndroidSystemMicMute(bool mute);
 
