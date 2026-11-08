@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
     qputenv("QT_ANDROID_DISABLE_ACCESSIBILITY", "1");
 
     QGuiApplication app(argc, argv);
-    QQuickStyle::setStyle("Fusion");
+    QQuickStyle::setStyle("Basic");
 #ifdef Q_OS_ANDROID
     qDebug() << "@@@ TeleLoc started";
     applyOrientationBasedOnDeviceType();

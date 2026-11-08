@@ -1256,6 +1256,7 @@ void NetworkEngine::autoAcceptCall()
 void NetworkEngine::closeCallDialog()
 {
     setCallingState(CallInfo::idle);
+    qDebug() << "@@@sound NetworkEngine::closeCallDialog() before emit";
     emit callStopped();
 }
 #ifdef Q_OS_ANDROID

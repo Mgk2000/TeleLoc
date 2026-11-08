@@ -2,53 +2,67 @@
 import QtQuick
 // qmllint disable import-unresolved
 import QtQuick.Controls
+import QtQuick.Layouts
 
 Popup {
     id: callScreenPopup
     width: parent ? parent.width : 360
-    height: parent ? (developer ? parent.height -250 : parent.height) : 640
-    modal: ! developer
+    height: parent ? parent.height : 640 //parent ? (developer ? parent.height - 150 : parent.height) : 640
+    modal: !developer
     focus: true
     closePolicy: Popup.NoAutoClose
 
-    // Позиционируем в левый верхний угол overlay-слоя
     x: 0
-    y:  developer ? 150 : 0
-    function setSpekVal ( val) {
-        speakerSpinBox.value = val
-        speakerLevel = val
-    }
-    function setMicVal ( val) {
-        micSpinBox.value = val
-        micLevel = val
-    }
-    parent: Overlay.overlay
-    property int micLevel
-     property int speakerLevel
+    y: 0 //developer ? 150 : 0
 
+    parent: Overlay.overlay
+
+    // Локальные свойства для динамического сглаживания индикаторов громкости
+    property int liveMicVolume: 0
+    property int liveSpeakerVolume: 0
+
+    property int micLevel
+    property int speakerLevel
     property string callerName: ""
     property int callNetType: -1
     property bool isIncoming: true
 
-    // --- НАСТРОЙКИ УРОВНЯ ЗВУКА ДЛЯ ОТЛАДКИ ---
+    function setSpekVal(val) {
+        speakerSpinBox.value = val
+        speakerLevel = val
+    }
+    function setMicVal(val) {
+        micSpinBox.value = val
+        micLevel = val
+    }
 
+    // СВЯЗЫВАЕМ СИГНАЛЫ ЖИВОЙ ГРОМКОСТИ С ИНДИКАТОРАМИ VU-METER
     Connections {
         target: audioEngine
+
+        // Сигнал микрофона из C++ воркера
+        function onMicVolumeUpdated(volume) {
+            callScreenPopup.liveMicVolume = volume
+        }
+
+        // Сигнал динамика из C++ воркера
+        function onNetVolumeUpdated(volume) {
+            callScreenPopup.liveSpeakerVolume = volume
+        }
+
         function onRemoteSetMicLevel(level){
             console.log("@@@sound QML RemoteSetMicLevel ", level)
             micLevel = level
-            //micSpinBox.setvalue(level)
-        }
-        function onRemoteSetSpeakerLevel(level){
-            console.log("@@@sound QML RemoteSetMicLevel ", level)
-            speakerLevel = level
-            //micSpinBox.setvalue(level)
         }
 
+        function onRemoteSetSpeakerLevel(level){
+            console.log("@@@sound QML RemoteSpeakerLevel ", level)
+            speakerLevel = level
+        }
     }
 
     background: Rectangle {
-        color: "#0a2f1d" // Глубокий темно-зеленый
+        color: "#291444" // Глубокий графитовый фон вместо старого ядовито-зеленого
         anchors.fill: parent
     }
 
@@ -64,8 +78,7 @@ Popup {
             color: callingColor
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: parent.height * 0.15
-
+            anchors.topMargin: developer ? parent.height * 0.52 : parent.height * 0.2
             Text {
                 text: "📞"
                 font.pixelSize: 50
@@ -80,35 +93,33 @@ Popup {
             }
         }
 
-        // --- РЕГУЛЯТОР МИКРОФОНА + ИНДИКАТОР ---
+        // --- РЕГУЛЯТОР МИКРОФОНА + РАБОЧИЙ ИНДИКАТОР ---
         Row {
             id: micController
             visible: developer
-            spacing: 8
+            spacing: 10
             anchors.right: iconContainer.left
-            anchors.rightMargin: 15
+            anchors.rightMargin: 20
             anchors.verticalCenter: iconContainer.verticalCenter
 
-            // Сам VU-Meter (вертикальный индикатор)
+            // Настоящий работающий VU-Meter микрофона
             Rectangle {
                 width: 6
-                height: 60
-                color: "#ff0000"
+                height: 64
+                color: "#252525" // Тёмная подложка
                 radius: 3
                 anchors.verticalCenter: parent.verticalCenter
 
-                // Заполняющая зеленая полоска
                 Rectangle {
                     width: parent.width
-                    // Высота привязана к свойству из C++ уровня звука
-                    height: parent.height * (audioEngine.currentMicLevel / 100.0)
-                    color: audioEngine.currentMicLevel > 85 ? "#e74c3c" : "#2ecc71" // Краснеет при перегрузке
+                    // Привязываем высоту строго к нашему локальному свойству liveMicVolume
+                    height: parent.height * (callScreenPopup.liveMicVolume / 100.0)
+                    color: callScreenPopup.liveMicVolume > 85 ? "#ef5350" : "#0fa958" // Краснеет при перегрузке
                     radius: parent.radius
                     anchors.bottom: parent.bottom
 
-                    // Плавное падение индикатора вниз (чтобы не дергался слишком резко)
                     Behavior on height {
-                        NumberAnimation { duration: 80; easing.type: Easing.OutQuad }
+                        NumberAnimation { duration: 100; easing.type: Easing.OutQuad } // Плавный спад пиков
                     }
                 }
             }
@@ -116,47 +127,47 @@ Popup {
             Column {
                 spacing: 5
                 Text {
-                    text: "🎙 Мик: " + callScreenPopup.micLevel
-                    color: "#a0c0b0"
+                    text: "🎙 Мик: " + callScreenPopup.micLevel + "%"
+                    color: "#aaaaaa"
                     font.pixelSize: 12
+                    font.weight: Font.Medium
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
                 GreenSpinBox {
                     id: micSpinBox
-                    // width и height подтянутся из шаблона (90x40), но их можно переписать здесь при желании
-
-                    from: 0; to: 100; value: micLevel
+                    from: 0; to: 100; value: callScreenPopup.micLevel
                     editable: true; stepSize: 5
 
                     onValueModified: {
                         micLevel = value
                         audioEngine.setMicLevel(value, true)
                     }
-                }            }
+                }
+            }
         }
 
-        // --- РЕГУЛЯТОР ДИНАМИКОВ + ИНДИКАТОР ---
+        // --- РЕГУЛЯТОР ДИНАМИКОВ + РАБОЧИЙ ИНДИКАТОР ---
         Row {
             id: speakerController
             visible: developer
-            spacing: 8
+            spacing: 10
             anchors.left: iconContainer.right
-            anchors.leftMargin: 15
+            anchors.leftMargin: 20
             anchors.verticalCenter: iconContainer.verticalCenter
 
             Column {
                 spacing: 5
                 Text {
-                    text: "🔊 Звк: " + callScreenPopup.speakerLevel
-                    color: "#a0c0b0"
+                    text: "🔊 Звк: " + callScreenPopup.speakerLevel + "%"
+                    color: "#aaaaaa"
                     font.pixelSize: 12
+                    font.weight: Font.Medium
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
                 GreenSpinBox {
                     id: speakerSpinBox
-                    // width и height подтянутся из шаблона (90x40), но их можно переписать здесь при желании
-
-                    from: 0; to: 100; value: micLevel
+                    from: 0; to: 100;
+                    value: callScreenPopup.speakerLevel // ИСПРАВЛЕНО: Убрана опечатка micLevel!
                     editable: true; stepSize: 5
 
                     onValueModified: {
@@ -166,23 +177,24 @@ Popup {
                 }
             }
 
-            // VU-Meter для динамиков
+            // Настоящий работающий VU-Meter динамика
             Rectangle {
                 width: 6
-                height: 60
-                color: "#143d26"
+                height: 64
+                color: "#252525"
                 radius: 3
                 anchors.verticalCenter: parent.verticalCenter
 
                 Rectangle {
                     width: parent.width
-                    height: parent.height * (audioEngine.currentSpeakerLevel / 100.0)
-                    color: audioEngine.currentSpeakerLevel > 85 ? "#e74c3c" : "#3498db" // Синеет/краснеет
+                    // Привязываем высоту строго к liveSpeakerVolume
+                    height: parent.height * (callScreenPopup.liveSpeakerVolume / 100.0)
+                    color: callScreenPopup.liveSpeakerVolume > 85 ? "#ef5350" : "#2f8ccb" // Синеет/краснеет при воспроизведении
                     radius: parent.radius
                     anchors.bottom: parent.bottom
 
                     Behavior on height {
-                        NumberAnimation { duration: 80; easing.type: Easing.OutQuad }
+                        NumberAnimation { duration: 100; easing.type: Easing.OutQuad }
                     }
                 }
             }
@@ -198,9 +210,9 @@ Popup {
 
             Text {
                 text: callScreenPopup.callerName
-                color: "white"
+                color: "#ffffff"
                 font.pixelSize: 28
-                font.bold: true
+                font.weight: Font.Bold
                 horizontalAlignment: Text.AlignHCenter
                 anchors.horizontalCenter: parent.horizontalCenter
                 elide: Text.ElideRight
@@ -208,64 +220,71 @@ Popup {
 
             Text {
                 text: callScreenPopup.isIncoming ? "Входящий вызов..." : "Исходящий вызов..."
-                color: "#8bc34a"
+                color: callScreenPopup.isIncoming ? "#2f8ccb" : "#0fa958" // Приятный синий или мягкий зеленый HyperOS
                 font.pixelSize: 16
+                font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
 
-        // --- НИЖНЯЯ ЧАСТЬ: 3-state Слайдер ---
+        // --- НИЖНЯЯ ЧАСТЬ: ТЁМНЫЙ ТРЁХПОЗИЦИОННЫЙ СЛАЙДЕР ---
         Item {
             id: sliderContainer
             width: parent.width * 0.85
-            height: 70
+            height: 66
             anchors.bottom: parent.bottom
             anchors.bottomMargin: parent.height * 0.08
             anchors.horizontalCenter: parent.horizontalCenter
 
             Rectangle {
                 anchors.fill: parent
-                color: "#143d26"
+                color: "#1e1e1e" // Стильная глубокая подложка мессенджера вместо старого зеленого
                 radius: height / 2
-                border.color: "#275d3d"
-                border.width: 1
+                border.color: "#2d2d2d"
+                border.width: 1.5
 
                 Text {
                     text: callScreenPopup.isIncoming ? "◀ Отклонить" : "◀ Отмена"
-                    color: "#a0c0b0"
+                    color: "#888888"
                     font.pixelSize: 14
+                    font.weight: Font.Medium
                     anchors.left: parent.left
-                    anchors.leftMargin: 25
+                    anchors.leftMargin: 24
                     anchors.verticalCenter: parent.verticalCenter
                 }
 
                 Text {
                     text: callScreenPopup.isIncoming ? "Принять ▶" : "Вызов ▶"
-                    color: "#a0c0b0"
+                    color: "#888888"
                     font.pixelSize: 14
+                    font.weight: Font.Medium
                     anchors.right: parent.right
-                    anchors.rightMargin: 25
+                    anchors.rightMargin: 24
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
 
+            // Ползунок свайпа вызова
             Rectangle {
                 id: handle
-                width: 66
-                height: 66
-                radius: 33
-                color: "white"
+                width: 62
+                height: 62
+                radius: 31
+                color: "#252525" // Стилизованный тёмный круг ползунка вместо белого
+                border.color: "#444444"
+                border.width: 1
                 anchors.verticalCenter: parent.verticalCenter
 
                 x: (sliderContainer.width - width) / 2
 
                 Text {
                     text: "↔"
-                    font.pixelSize: 24
+                    font.pixelSize: 22
                     font.bold: true
-                    color: handle.x < ((sliderContainer.width - handle.width) / 2 - 20) ? "#e74c3c" :
-                           handle.x > ((sliderContainer.width - handle.width) / 2 + 20) ? "#2ecc71" : "#143d26"
+                    // Динамическая смена цвета стрелок при перетаскивании
+                    color: handle.x < ((sliderContainer.width - handle.width) / 2 - 20) ? "#ef5350" : // Мягкий красный
+                           handle.x > ((sliderContainer.width - handle.width) / 2 + 20) ? "#0fa958" : "#888888" // Мягкий зеленый / нейтральный
                     anchors.centerIn: parent
                 }
 
@@ -301,11 +320,9 @@ Popup {
                             if (callScreenPopup.isIncoming) {
                                 netEngine.stopAudioCall();
                                 netEngine.masterStopRecording()
-
                             } else {
-                               netEngine.stopAudioCall();
+                                netEngine.stopAudioCall();
                                 netEngine.masterStopRecording()
-
                             }
                             callScreenPopup.close();
                         }
@@ -325,18 +342,136 @@ Popup {
             }
         }
     }
+    RowLayout {
+        id: developerFooter
+        y: parent.height - 60
+        x:100
+        visible: developer
+        // Чекбокс изменения настроек удаленного абонента
+        CheckBox {
+            id: remoteCheckbox
+            checked: false
+            text: "R"
+            //Layout.fillWidth: true
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
+            Layout.alignment: Qt.AlignVCenter
+
+            contentItem: Text {
+                text: remoteCheckbox.text
+                font.pixelSize: 30
+                font.weight: Font.Medium
+                color: remoteCheckbox.checked ? "#2f8ccb" : "#aaaaaa"
+                leftPadding: remoteCheckbox.indicator.width + remoteCheckbox.spacing
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            indicator: Rectangle {
+                implicitWidth: 20
+                implicitHeight: 20
+                x: remoteCheckbox.leftPadding
+                y: parent.height / 2 - height / 2
+                radius: 5
+                color: remoteCheckbox.checked ? "#2f8ccb" : "transparent"
+                border.color: remoteCheckbox.checked ? "#2f8ccb" : "#555555"
+                border.width: 1.5
+
+                Rectangle {
+                    width: 10; height: 5
+                    border.color: "white"; border.width: 1.5; color: "transparent"
+                    visible: remoteCheckbox.checked
+                    rotation: -45
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -1
+                }
+            }
+
+            onCheckedChanged: {
+                netEngine.setRemoteControl(checked)
+                console.log("@@@sound NoiseSuppress=", checked)
+                var m = audioEngine.getMicLevel()
+                var s = audioEngine.getSpeakerLevel()
+                var rm = audioEngine.getRemoteMicLevel()
+                var rs = audioEngine.getRemoteSpeakerLevel()
+                if (checked) {
+                    customCallScreen.setSpekVal(rs)
+                    customCallScreen.setMicVal(rm)
+                } else {
+                    customCallScreen.setSpekVal(s)
+                    customCallScreen.setMicVal(m)
+                }
+            }
+        }
+        // Кнопка 2: Запись аудио разговора (btnRecord) — Сдержанная красная
+        Button {
+            id: btnRecord1
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
+            checkable: true
+            checked: false
+            visible : developer
+            onCheckedChanged: {
+                if (checked) {
+                    netEngine.masterStartRecording()
+                } else {
+                    netEngine.masterStopRecording()
+                }
+            }
+
+            background: Rectangle {
+                color: btnRecord1.checked ? "#331111" : "#252525"
+                border.color: btnRecord1.checked ? "#ef5350" : "#444444"
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Item {
+                anchors.fill: parent
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: btnRecord1.checked ? 12 : 10
+                    height: btnRecord1.checked ? 12 : 10
+                    radius: btnRecord1.checked ? 2 : 5
+                    color: "#ef5350"
+                }
+            }
+        }
+        Button {
+            id : noisesuppreessbutton
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
+            checkable: true
+            checked: false
+            background: Rectangle {
+                color: noisesuppreessbutton.checked ? "#770000" : "#cccccc"
+                border.color: noisesuppreessbutton.checked ? "#bb0000" : "#224466"
+                border.width: 6
+                radius: 8
+            }
+            contentItem: Item {
+                anchors.fill: parent
+                Text {
+                    text : "N"
+                font.pixelSize: 40; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter;}
+            }
+            onCheckedChanged: {
+                console.log("@@@sound QML NoiseSuppress=", checked)
+                audioEngine.setNoiseSuppress(checked)
+            }
+
+        }
+    }
 
     onOpened: {
         handle.x = (sliderContainer.width - handle.width) / 2;
         console.log("@@@sound Open call diialog")
         audioEngine.initConfigLevels()
-        // Синхронизируем интерфейс с текущими значениями из C++ при открытии окна
+
         micSpinBox.value = callScreenPopup.micLevel
         speakerSpinBox.value = callScreenPopup.speakerLevel
         remoteCheckbox.checked = false
     }
     onClosed: {
         remoteCheckbox.checked = false
-
     }
 }

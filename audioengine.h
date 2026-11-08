@@ -43,6 +43,7 @@ public:
     int getSpeakerLevel() const {return m_speakerLevel;}
     void setMicLevel (int l) {m_micLevel = l;}
     void setSpeakerLevel(int l) {m_speakerLevel = l;}
+    bool isRunning();
 signals:
     void micVolumeMeasured(int volume);
     void speakerVolumeMeasured(int volume);
@@ -127,7 +128,7 @@ public:
 
     Q_INVOKABLE int getRemoteSpeakerLevel() const;
     Q_INVOKABLE void setRemoteSpeakerLevel(int newRemoteSpeakerLevel);
-
+    Q_INVOKABLE void setNoiseSuppress(bool sup);
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);

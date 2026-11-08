@@ -21,6 +21,7 @@ int m_savedMicLevel, m_savedSpeakerLevel;
 int remoteMicLevel, remoteSpeakerLevel;
 int m_maxSpeakerLevel;
 int m_micLevel = 30, m_speakerLevel = 30;
+bool noiseSuppressFlag;
 AudioEngine::AudioEngine(QObject *parent)
 
     : QObject(parent)
@@ -78,6 +79,8 @@ void AudioEngine::stop()
     qDebug() << "@@@ [Controller] Requesting audio stop";
     QMetaObject::invokeMethod(m_worker, &AudioWorker::stopAudio, Qt::QueuedConnection);
     speakerTimer.stop();
+    netEngine->closeCallDialog();
+
     restoreLevels();
 }
 
@@ -145,6 +148,15 @@ void AudioEngine::setRemoteSpeakerLevel(int newRemoteSpeakerLevel)
     remoteSpeakerLevel = newRemoteSpeakerLevel;
 }
 
+void AudioEngine::setNoiseSuppress(bool sup)
+{
+    noiseSuppressFlag = sup;
+    if (m_worker->isRunning())
+        QMetaObject::invokeMethod(m_worker, [this]() {
+                m_worker->startAudio();
+            }, Qt::QueuedConnection);
+}
+
 int AudioEngine::getRemoteMicLevel() const
 {
     return remoteMicLevel;
@@ -193,7 +205,6 @@ void AudioEngine::onSpeakerTick()
     qDebug() << "@@@audio data=" << m_worker->speakerDataCount;
     if (m_worker-> wasSound && !m_worker->speakerDataCount) {
         this->stop();
-        netEngine->closeCallDialog();
     }
     m_worker->speakerDataCount = 0;
 }
@@ -287,37 +298,46 @@ void AudioWorker::stopAudio()
     // Переводим аудиосистему Android обратно в штатный режим (Normal)
     setAndroidVoipMode(false, 0);
 }
-
+bool AudioWorker::isRunning()
+{
+    return !!m_udpSender;
+}
 void AudioWorker::setAndroidVoipMode(bool enable, int audioSessionId)
 {
 #ifdef Q_OS_ANDROID
-    qDebug() << "@@@ [JNI] setAndroidVoipMode init. Enable:" << enable << "SessionID:" << audioSessionId;
+    qWarning() << "@@@sound setAndroidVoipMode init 1. Enable:" << enable << "SessionID:" << audioSessionId;
     QJniEnvironment env;
     if (!env.isValid()) return;
-
+    qDebug() << "@@@sound setAndroidVoipMode init 2";
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     if (!context.isValid()) return;
+    qDebug() << "@@@sound setAndroidVoipMode init3 ";
 
     QJniObject audioServiceString = QJniObject::getStaticObjectField(
         "android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
     if (!audioServiceString.isValid()) return;
+    qDebug() << "@@@sound setAndroidVoipMode init 4";
 
     QJniObject audioManager = context.callObjectMethod(
         "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
     if (!audioManager.isValid()) return;
+    qDebug() << "@@@sound setAndroidVoipMode init 5";
 
     int mode = enable ? 3 : 0;
     audioManager.callMethod<void>("setMode", "(I)V", mode);
 
-    if (enable) {
-        // Жестко принуждаем Android вещать звук через громкий СПИКЕРФОН, игнорируя датчик уха
+    if (enable)
+    {
+        qDebug() << "@@@sound setAndroidVoipMode init 6";
+       // Жестко принуждаем Android вещать звук через громкий СПИКЕРФОН, игнорируя датчик уха
         audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
 
         jboolean aecAvailable = QJniObject::callStaticMethod<jboolean>(
             "android/media/audiofx/AcousticEchoCanceler", "isAvailable");
-        qDebug() << "@@@ [JNI] Hardware AcousticEchoCanceler available:" << aecAvailable;
+        qDebug() << "@@@sound setAndroidVoipMode init 7 Hardware AcousticEchoCanceler available:" << aecAvailable;
 
-        if (aecAvailable && audioSessionId > 0) {
+        if (aecAvailable /*&& audioSessionId > 0 */) {
+            qDebug() << "@@@sound setAndroidVoipMode init 8 aecAvailable && audioSessionId=" << aecAvailable << audioSessionId;
             QJniObject aecObject = QJniObject::callStaticObjectMethod(
                 "android/media/audiofx/AcousticEchoCanceler",
                 "create",
@@ -326,12 +346,22 @@ void AudioWorker::setAndroidVoipMode(bool enable, int audioSessionId)
                 );
 
             if (aecObject.isValid()) {
+                qDebug() << "@@@sound setAndroidVoipMode init 9";
                 jint result = aecObject.callMethod<jint>("setEnabled", "(Z)I", true);
-                qDebug() << "@@@ [JNI] Hardware AEC binding result:" << (result == 0 ? "SUCCESS" : "ERROR");
+                qDebug() << "@@@@@@sound setAndroidVoipMode init 10 Hardware AEC binding result:" << (result == 0 ? "SUCCESS" : "ERROR");
             }
         }
+        // Включаем подавление шума/свиста (NS)
+        if (noiseSuppressFlag)
+        if (QJniObject::callStaticMethod<jboolean>("android/media/audiofx/NoiseSuppression", "isAvailable")) {
+            QJniObject ns = QJniObject::callStaticMethod<QJniObject>(
+                "android/media/audiofx/NoiseSuppression", "create", "(I)Landroid/media/audiofx/NoiseSuppression;", audioSessionId
+                );
+            qWarning () << "@@@sound setAndroidVoipMode init 11 Suppress=" << noiseSuppressFlag   << "ns.isValid()"  << ns.isValid();
+            if (ns.isValid()) ns.callMethod<jint>("setEnabled", "(Z)I", true);
+        }
     }
-    qDebug() << "@@@ [JNI] setAndroidVoipMode finished successfully";
+    qDebug() << "@@@sound setAndroidVoipMode init 12 setAndroidVoipMode finished successfully";
 #else
     Q_UNUSED(enable);
     Q_UNUSED(audioSessionId);
