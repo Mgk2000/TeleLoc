@@ -209,20 +209,10 @@ private slots:
     void onSpeakerTick();
 };
 
-#include <QtCore/qnativeinterface.h>
-#include <QCoreApplication>
-#ifdef Q_OS_ANDROID
-#include <QJniObject>
-#include <QJniEnvironment>2
-#include <QAudioSource>
-#include <QAudioSink>
-#endif
+void initAudioManager();
 
-int getAndroidAbsoluteSpeakerVolume();
-int getSpeakerVolumePercentage();
-using namespace QNativeInterface;
-void setAndroidAbsoluteSpeakerVolume(int volume);
-int getAndroidMaxSpeakerVolume();
+int getSpeakerVolumePercentage(bool);
+//using namespace QNativeInterface;
 void setAndroidSystemMicMute(bool mute);
-bool setSpeakerVolumePercentage(int percentage);
+void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone);
 #endif // AUDIOENGINE_H

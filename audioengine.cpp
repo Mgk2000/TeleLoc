@@ -27,13 +27,16 @@ int m_whistleLimit =10000000;
 int m_maxNoWhistleLevel;
 bool m_whistle;
 int m_whistleTicks;
+QJniObject audioManager;
+jint maxSpeakVolume, maxMusicVolume;
+jint VOICE_STREAM_TYPE, MUSIC_STREAM_TYPE;
+
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
     , m_worker(nullptr)
     , m_isEchoTestMode(false)
 {
-    m_maxSpeakerLevel = getAndroidMaxSpeakerVolume();
-
+    initAudioManager();
     readLevels();
 
     // 1. Создаем воркер и поток для звука
@@ -201,7 +204,7 @@ void AudioEngine::onSpeakerTick()
 {
     m_whistle = m_sampleCounter > m_whistleLimit;
     if (m_whistle) {
-        qCritical() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter << getSpeakerVolumePercentage();
+        qCritical() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter << getSpeakerVolumePercentage(true);
         if (m_speakerLevel>=30 && (m_whistleTicks == 0 || m_whistleTicks >= 5))
             m_maxNoWhistleLevel -= 5;
             m_speakerLevel -=20;
@@ -210,7 +213,7 @@ void AudioEngine::onSpeakerTick()
             else m_whistleTicks++;
         }
     else {
-        qDebug() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter  << getSpeakerVolumePercentage();
+        qDebug() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter  << getSpeakerVolumePercentage(true) << maxSpeakVolume << maxMusicVolume;
         if (m_speakerLevel < m_maxNoWhistleLevel) {
                 m_speakerLevel += 5;
                 setSpeakerLevel(m_speakerLevel, true, true);
@@ -465,75 +468,6 @@ void AudioWorker::onReadyReadUdp()
 
         int currentVolume = (maxAmp * 100) / 32767;
         emit speakerVolumeMeasured(currentVolume);
-#if 0
-        // Детектор лавинообразного роста свиста
-        bool isFrequencyStable = (std::abs(zeroCrossings - m_lastZeroCrossings) <= 3);
-        bool isLoudEnough = (maxAmp > 1500);
-
-        if (isFrequencyStable && isLoudEnough && (maxAmp > m_lastMaxAmplitude)) {
-            m_consecutiveGrowthFrames++;
-        } else {
-            if (m_consecutiveGrowthFrames > 0) m_consecutiveGrowthFrames--;
-        }
-
-        m_lastZeroCrossings = zeroCrossings;
-        m_lastMaxAmplitude = maxAmp;
-
-        // Если лавина свиста разгоняется 8 кадров подряд — вычисляем частоту
-        if (m_whistle /*m_consecutiveGrowthFrames >= 8*/) {
-            m_notchFreq = static_cast<float>(zeroCrossings * 16000) / static_cast<float>(2 * samplesCount);
-            qWarning() << "@@@sound [DSP] Детектор обнаружил частоту свиста:" << m_notchFreq << "Гц";
-
-            // ВТОРОЙ РУБЕЖ ОБОРОНЫ: Если флаг активен, принудительно роняем общую громкость
-            if (m_preventWhistle) {
-                qWarning() << "@@@sound [DSP] Активирован автоматический глушитель громкости!";
-                m_autoVolumeAttenuator = 0.15f;
-            }
-
-            m_consecutiveGrowthFrames = 0;
-        } else {
-            // Если свист прекратился, плавно возвращаем громкость назад (+2% за фрейм)
-            if (m_autoVolumeAttenuator < 1.0f) {
-                m_autoVolumeAttenuator += 0.02f;
-                if (m_autoVolumeAttenuator > 1.0f) m_autoVolumeAttenuator = 1.0f;
-            }
-        }
-#endif
-        // ------------------------------------------------------------------------
-        // РУБЕЖ 1: ДИНАМИЧЕСКИЙ РЕЖЕКТОРНЫЙ NOTCH-ФИЛЬТР (ФЛАГ m_Notch)
-        // ------------------------------------------------------------------------
-        if (m_Notch) {
-            if(m_notchFreq > 100.0f && m_notchFreq < 7500.0f) {
-            float omega = (2.0f * M_PI * m_notchFreq) / 16000.0f;
-            float alpha = std::sin(omega) / (2.0f * 10.0f); // Q = 10.0
-
-            float b0 = 1.0f;
-            float b1 = -2.0f * std::cos(omega);
-            float b2 = 1.0f;
-            float a0 = 1.0f + alpha;
-            float a1 = -2.0f * std::cos(omega);
-            float a2 = 1.0f - alpha;
-
-            b0 /= a0; b1 /= a0; b2 /= a0; a1 /= a0; a2 /= a0;
-
-            for (int i = 0; i < samplesCount; ++i) {
-                float x0 = static_cast<float>(pcmPtr[i]);
-                float y0 = (b0 * x0) + (b1 * m_nz1) + (b2 * m_nz2) - (a1 * m_nz1) - (a2 * m_nz2);
-
-                m_nz2 = m_nz1;
-                m_nz1 = x0;
-
-                if (y0 > 32767.0f) y0 = 32767.0f;
-                if (y0 < -32768.0f) y0 = -32768.0f;
-
-                pcmPtr[i] = static_cast<short>(y0);
-            }
-            }
-            else {
-            m_nz1 = 0.0f; m_nz2 = 0.0f;
-            if (m_notchFreq > 0.0f) m_notchFreq *= 0.95f;
-             }
-        }
         // ------------------------------------------------------------------------
         // 3. ПРИМЕНЕНИЕ КИХ-ФИЛЬТРА СГЛАЖИВАНИЯ (Срез песка выше 4.5 КГц)
         // ------------------------------------------------------------------------
@@ -547,7 +481,7 @@ void AudioWorker::onReadyReadUdp()
                 pcmPtr[i] = static_cast<short>(smoothed);
             }
         }
-
+        if (m_Notch){
         // ------------------------------------------------------------------------
         // ПРИМЕНЕНИЕ ГРОМКОСТИ, ЭХО-ДЕМПИНГА И ДИНАМИЧЕСКОГО ГЛУШИТЕЛЯ
         // ------------------------------------------------------------------------
@@ -564,7 +498,7 @@ void AudioWorker::onReadyReadUdp()
                 pcmPtr[i] = static_cast<short>(adjusted);
             }
         }
-
+        }
         if (m_writeToFile) {
             openFiles();
             m_unixFileReceiverOut.write(pcmChunk);
@@ -1117,7 +1051,7 @@ void AudioEngine::setSpeakerLevel(int level, bool save, bool automatic) {
 
     // Рассчитываем абсолютную громкость на основе лимитов потока звонка
     //setAndroidAbsoluteSpeakerVolume(level * m_maxSpeakerLevel / 100.0f);
-    setSpeakerVolumePercentage(level);
+    setSpeakerVolumePercentage(true, level, false);
     if (save)
         saveConfigLevels();
 
@@ -1197,56 +1131,6 @@ void AudioWorker::detectAndSuppressWhistle(short *samples, int count)
     }
 }
 
-// ------------------------------------------------------------------------
-// НАЖАТЫЕ ИСПРАВЛЕННЫЕ НАТИВНЫЕ МЕТОДЫ ANDROID (STREAM_VOICE_CALL = 0)
-// ------------------------------------------------------------------------
-
-void setAndroidAbsoluteSpeakerVolume(int volume) {
-#ifdef Q_OS_ANDROID
-    QJniObject context = QNativeInterface::QAndroidApplication::context();
-    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
-    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
-
-    if (audioManager.isValid()) {
-        // КРИТИЧЕСКИ ВАЖНО: Для голосовой связи используем STREAM_VOICE_CALL (0) вместо STREAM_MUSIC (3)
-        int streamType = 0;
-        int flags = 0; // 0 - менять тихо в фоне, 1 - показать шторку
-
-        audioManager.callMethod<void>("setStreamVolume", "(III)V", streamType, (jint)volume, flags);
-    }
-#endif
-}
-
-int getAndroidMaxSpeakerVolume() {
-#ifdef Q_OS_ANDROID
-    QJniObject context = QNativeInterface::QAndroidApplication::context();
-    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
-    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
-
-    if (audioManager.isValid()) {
-        // КРИТИЧЕСКИ ВАЖНО: Запрашиваем максимум для STREAM_VOICE_CALL (0)
-        return audioManager.callMethod<jint>("getStreamMaxVolume", "(I)I", 0);
-    }
-#endif
-    return 5; // У потока звонка обычно от 5 до 7 шагов регулировки (в отличие от 15 у музыки)
-}
-
-int getAndroidAbsoluteSpeakerVolume() {
-#ifdef Q_OS_ANDROID
-    QJniObject context = QNativeInterface::QAndroidApplication::context();
-    QJniObject audioServiceString = QJniObject::getStaticObjectField("android/content/Context", "AUDIO_SERVICE", "Ljava/lang/String;");
-    QJniObject audioManager = context.callObjectMethod("getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", audioServiceString.object());
-
-    if (audioManager.isValid()) {
-        // КРИТИЧЕСКИ ВАЖНО: Читаем текущую громкость потока разговора STREAM_VOICE_CALL (0)
-        int streamType = 0;
-        int currentVol = audioManager.callMethod<jint>("getStreamVolume", "(I)I", streamType);
-        return currentVol;
-    }
-#endif
-    return 100;
-}
-
 void setAndroidSystemMicMute(bool mute) {
 #ifdef Q_OS_ANDROID
     QJniObject context = QNativeInterface::QAndroidApplication::context();
@@ -1263,8 +1147,8 @@ void setAndroidSystemMicMute(bool mute) {
 #include <QJniEnvironment>
 #include <QDebug>
 #include <algorithm>
-
-int getSpeakerVolumePercentage() {
+void initAudioManager()
+{
 #ifdef Q_OS_ANDROID
     // 1. Получаем текущую активность Android (контекст)
     QJniObject activity = QJniObject::callStaticObjectMethod(
@@ -1275,7 +1159,7 @@ int getSpeakerVolumePercentage() {
 
     if (!activity.isValid()) {
         qWarning() << "Ошибка: Не удалось получить Android Activity context.";
-        return -1;
+        return;
     }
 
     // 2. Получаем константу названия аудио-сервиса (Context.AUDIO_SERVICE)
@@ -1286,150 +1170,133 @@ int getSpeakerVolumePercentage() {
         );
 
     // 3. Запрашиваем системный сервис AudioManager
-    QJniObject audioManager = activity.callObjectMethod(
+    audioManager = activity.callObjectMethod(
         "getSystemService",
         "(Ljava/lang/String;)Ljava/lang/Object;",
         audioServiceName.object<jstring>()
         );
 
-    if (!audioManager.isValid()) {
-        qWarning() << "Ошибка: Системный сервис AudioManager недоступен.";
-        return -1;
-    }
-
-    /*
-       4. Выбираем тип потока:
-       STREAM_VOICE_CALL (0) -> Разговорный динамик (спикер для звонков)
-       STREAM_MUSIC (3)      -> Основной динамик (Мультимедиа/Музыка)
-    */
-    jint STREAM_TYPE = QJniObject::getStaticField<jint>(
+    // Кэшируем только неизменяемые ID потоков
+    VOICE_STREAM_TYPE = QJniObject::getStaticField<jint>(
         "android/media/AudioManager",
         "STREAM_VOICE_CALL"
         );
-
-    // 5. Получаем текущую и максимальную громкость через JNI
-    jint currentVolume = audioManager.callMethod<jint>(
-        "getStreamVolume",
-        "(I)I",
-        STREAM_TYPE
+    MUSIC_STREAM_TYPE = QJniObject::getStaticField<jint>(
+        "android/media/AudioManager",
+        "STREAM_MUSIC"
         );
-
-    jint maxVolume = audioManager.callMethod<jint>(
-        "getStreamMaxVolume",
-        "(I)I",
-        STREAM_TYPE
-        );
-
-    // Проверяем на ошибки JNI после вызовов
-    QJniEnvironment env;
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-        qWarning() << "Ошибка: Произошло исключение при вызове методов AudioManager.";
-        return -1;
-    }
-
-    // 6. Расчет процентов с защитой от деления на ноль
-    if (maxVolume <= 0) {
-        return 0;
-    }
-
-    int percentage = (currentVolume * 100) / maxVolume;
-    return std::clamp(percentage, 0, 100);
-#else
-    return 100;
 #endif
 }
-//#include <QJniObject>
-//#include <QJniEnvironment>
-//#include <QDebug>
-//#include <algorithm>
 
-bool setSpeakerVolumePercentage(int percentage) {
+int getSpeakerVolumePercentage(bool voice) {
 #ifdef Q_OS_ANDROID
-
-    // 1. Ограничиваем входящие проценты диапазоном [0, 100]
-    percentage = std::clamp(percentage, 0, 100);
-
-    // 2. Получаем Android Activity context
-    QJniObject activity = QJniObject::callStaticObjectMethod(
-        "org/qtproject/qt/android/QtNative",
-        "activity",
-        "()Landroid/app/Activity;"
-        );
-
-    if (!activity.isValid()) {
-        qWarning() << "Ошибка: Не удалось получить Android Activity.";
-        return false;
-    }
-
-    // 3. Получаем AudioManager
-    QJniObject audioServiceName = QJniObject::getStaticObjectField(
-        "android/content/Context",
-        "AUDIO_SERVICE",
-        "Ljava/lang/String;"
-        );
-
-    QJniObject audioManager = activity.callObjectMethod(
-        "getSystemService",
-        "(Ljava/lang/String;)Ljava/lang/Object;",
-        audioServiceName.object<jstring>()
-        );
-
     if (!audioManager.isValid()) {
-        qWarning() << "Ошибка: AudioManager недоступен.";
-        return false;
+        qWarning() << "AudioManager не инициализирован! Вызовите initAudioManager сначала.";
+        return -1;
     }
 
-    // 4. Задаем тип потока (Разговорный динамик: STREAM_VOICE_CALL)
-    jint STREAM_TYPE = QJniObject::getStaticField<jint>(
-        "android/media/AudioManager",
-        "STREAM_VOICE_CALL"
+    // 1. Определяем тип потока
+    jint streamType = voice ? VOICE_STREAM_TYPE : MUSIC_STREAM_TYPE;
+
+    // 2. Получаем АКТУАЛЬНЫЕ значения текущего шага и максимума шкалы
+    jint currentVol = audioManager.callMethod<jint>(
+        "getStreamVolume",
+        "(I)I",
+        streamType
         );
 
-    // 5. Узнаем максимальный шаг громкости для этого потока
-    jint maxVolume = audioManager.callMethod<jint>(
+    jint maxVol = audioManager.callMethod<jint>(
         "getStreamMaxVolume",
         "(I)I",
-        STREAM_TYPE
-        );
-
-    if (maxVolume <= 0) {
-        return false;
-    }
-
-    // 6. Переводим проценты в абсолютный шаг шкалы Android
-    // Добавляем (100 / 2) для корректного математического округления
-    jint targetVolume = (percentage * maxVolume + 50) / 100;
-    targetVolume = std::clamp(targetVolume, 0, maxVolume);
-
-    /*
-       7. Выставляем флаги визуализации (Флаги AudioManager):
-       FLAG_SHOW_UI (1)     -> Показывать ли стандартный системный ползунок громкости на экране.
-       FLAG_PLAY_SOUND (4)  -> Воспроизводить ли звуковой "пик" при изменении (для STREAM_VOICE_CALL обычно 0).
-       Если хотите менять громкость скрытно, передайте последним параметром просто цифру 0.
-    */
-    jint FLAGS = QJniObject::getStaticField<jint>("android/media/AudioManager", "FLAG_SHOW_UI");
-
-    // 8. Записываем новое значение громкости
-    audioManager.callMethod<void>(
-        "setStreamVolume",
-        "(III)V",
-        STREAM_TYPE,
-        targetVolume,
-        FLAGS
+        streamType
         );
 
     // Проверяем JNI на исключения
     QJniEnvironment env;
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        qWarning() << "Ошибка: Исключение Android при изменении громкости.";
-        return false;
+        qWarning() << "Ошибка: Исключение Android при чтении громкости.";
+        return -1;
     }
 
-    return true;
-#else
-    return true;
-#endif
+    // 3. Защита от деления на ноль
+    if (maxVol <= 0) {
+        return 0;
+    }
 
+    // 4. Переводим в проценты и ограничиваем диапазон [0, 100]
+    int percentage = (currentVol * 100) / maxVol;
+    return std::clamp(percentage, 0, 100);
+#else
+    Q_UNUSED(voice);
+    return 100; // Дефолтное значение для других ОС
+#endif
+}
+void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone) {
+#ifdef Q_OS_ANDROID
+    if (!audioManager.isValid()) {
+        qWarning() << "AudioManager не инициализирован! Вызовите initAudioManager сначала.";
+        return;
+    }
+
+    // 1. Управление громкой связью (Speakerphone) и режимом аудио
+    jint MODE_IN_COMMUNICATION = QJniObject::getStaticField<jint>(
+        "android/media/AudioManager",
+        "MODE_IN_COMMUNICATION"
+        );
+    jint MODE_NORMAL = QJniObject::getStaticField<jint>(
+        "android/media/AudioManager",
+        "MODE_NORMAL"
+        );
+
+    if (speakerphone) {
+        audioManager.callMethod<void>("setMode", "(I)V", MODE_IN_COMMUNICATION);
+        audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", true);
+    } else {
+        audioManager.callMethod<void>("setSpeakerphoneOn", "(Z)V", false);
+        audioManager.callMethod<void>("setMode", "(I)V", MODE_NORMAL);
+    }
+
+    // 2. Запрос АКТУАЛЬНОГО максимума шкалы для выбранного потока
+    jint streamType = voice ? VOICE_STREAM_TYPE : MUSIC_STREAM_TYPE;
+
+    jint maxVol = audioManager.callMethod<jint>(
+        "getStreamMaxVolume",
+        "(I)I",
+        streamType
+        );
+
+    // Защита: если операционная система вернула некорректное значение шкалы
+    if (maxVol <= 0) {
+        qWarning() << "Не удалось получить максимальную громкость для потока:" << streamType;
+        return;
+    }
+
+    // 3. Расчет и установка громкости
+    percentage = std::clamp(percentage, 0, 100);
+
+    // Математическое округление
+    jint targetVolume = (percentage * maxVol + 50) / 100;
+    targetVolume = std::clamp(targetVolume, 0, maxVol);
+
+    // Устанавливаем громкость
+    audioManager.callMethod<void>(
+        "setStreamVolume",
+        "(III)V",
+        streamType,
+        targetVolume,
+        0 // 0 означает скрытое изменение (без вывода системного ползунка на экран)
+        );
+
+    // Проверяем JNI на исключения
+    QJniEnvironment env;
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        qWarning() << "Ошибка: Исключение Android при изменении громкости или режима связи.";
+    }
+#else
+    Q_UNUSED(voice);
+    Q_UNUSED(percentage);
+    Q_UNUSED(speakerphone);
+#endif
 }

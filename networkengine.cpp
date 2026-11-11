@@ -740,7 +740,7 @@ void NetworkEngine::incomingCall()
     qDebug() << "@@@incomingCall incomingCall Busy=" << callInfo.busy() << callInfo.ip ;
     if (callInfo.busy())
         return;
-    setAndroidAbsoluteSpeakerVolume(50);
+    setSpeakerVolumePercentage(false, 100, true);
     m_incomingRing->play();
     setCallingState(CallInfo::inCalling);
 
