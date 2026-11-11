@@ -20,7 +20,13 @@ int remoteMicLevel, remoteSpeakerLevel;
 int m_maxSpeakerLevel;
 int m_micLevel = 30, m_speakerLevel = 30;
 bool noiseSuppressFlag = true; // По умолчанию включено для борьбы со свистом
-
+bool m_Notch = true;           // Флаг включения/выключения Notch-фильтра
+bool m_preventWhistle = true;
+qint64 m_sampleCounter = 0;
+int m_whistleLimit =10000000;
+int m_maxNoWhistleLevel;
+bool m_whistle;
+int m_whistleTicks;
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
     , m_worker(nullptr)
@@ -137,9 +143,9 @@ void AudioEngine::toggleEchoTest()
 void AudioEngine::setNoiseSuppress(bool sup)
 {
     noiseSuppressFlag = sup;
-    qDebug() << "@@@ [Controller] Noise Suppress toggled to:" << sup;
+    qDebug() << "@@@sound [Controller] Noise Suppress toggled to:" << sup;
 
-    if (m_worker->isRunning()) {
+    if (false && m_worker->isRunning()) {
         QMetaObject::invokeMethod(m_worker, [this]() {
                 // Динамически перенастраиваем VoIP режим (AEC/NS) без полного перезапуска аудио-потоков
                 m_worker->setAndroidVoipMode(true);
@@ -147,6 +153,13 @@ void AudioEngine::setNoiseSuppress(bool sup)
     }
 }
 
+void AudioEngine::setNotch(bool bn) {m_Notch = bn;}
+
+void AudioEngine::setPreventWhistle(bool bn)
+{
+    m_preventWhistle = bn;
+}
+bool Notch() {return m_Notch;}
 void AudioEngine::readLevels() {
     // Ваша существующая логика чтения уровней
 }
@@ -186,11 +199,29 @@ int AudioEngine::currSpeakerLevel()
 
 void AudioEngine::onSpeakerTick()
 {
-    qDebug() << "@@@audio data=" << m_worker->speakerDataCount;
+    m_whistle = m_sampleCounter > m_whistleLimit;
+    if (m_whistle) {
+        qCritical() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter << getSpeakerVolumePercentage();
+        if (m_speakerLevel>=30 && (m_whistleTicks == 0 || m_whistleTicks >= 5))
+            m_maxNoWhistleLevel -= 5;
+            m_speakerLevel -=20;
+            setSpeakerLevel(m_speakerLevel, true, true);
+            if (m_whistleTicks  >=5) m_whistleTicks = 0;
+            else m_whistleTicks++;
+        }
+    else {
+        qDebug() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter  << getSpeakerVolumePercentage();
+        if (m_speakerLevel < m_maxNoWhistleLevel) {
+                m_speakerLevel += 5;
+                setSpeakerLevel(m_speakerLevel, true, true);
+                m_whistleTicks = 0;
+        }
+    }
     if (m_worker->wasSound && !m_worker->speakerDataCount) {
         this->stop();
     }
     m_worker->speakerDataCount = 0;
+    m_sampleCounter = 0;
 }
 
 // ============================================================================
@@ -372,26 +403,22 @@ void AudioWorker::onReadyReadUdp()
         QHostAddress senderAddress;
         quint16 senderPort;
 
-        // Читаем сжатый Opus-пакет из сети UDP
         compressedChunk.resize(static_cast<int>(m_udpReceiver->pendingDatagramSize()));
-        int dataSize = compressedChunk.size();
+        m_udpReceiver->readDatagram(compressedChunk.data(), compressedChunk.size(), &senderAddress, &senderPort);
+        if (compressedChunk.isEmpty()) continue;
+
         speakerDataCount++;
         wasSound = true;
-
-        m_udpReceiver->readDatagram(compressedChunk.data(), dataSize, &senderAddress, &senderPort);
-        if (compressedChunk.isEmpty()) continue;
 
         if (m_isEchoTestMode && m_udpSender) {
             m_udpSender->writeDatagram(compressedChunk, senderAddress, 28002);
             continue;
         }
 
-        // Временный буфер для разжатия PCM (запас 960 сэмплов)
         QByteArray pcmChunk;
         int maxFrameSize = 960;
         pcmChunk.resize(maxFrameSize * sizeof(short));
 
-        // ВЕРНУЛИ ОПУС-ДЕКОДЕР: Превращаем сжатый сетевой чанк обратно в сырой PCM
         if (m_opusDecoder) {
             int decodedSamples = opus_decode(
                 reinterpret_cast<OpusDecoder*>(m_opusDecoder),
@@ -403,39 +430,140 @@ void AudioWorker::onReadyReadUdp()
                 );
 
             if (decodedSamples > 0) {
-                // Подрезаем буфер под реальное количество декодированных сэмплов (обычно 320)
                 pcmChunk.resize(decodedSamples * sizeof(short));
-
-                // ИСПРАВЛЕНО: Записываем в файл чистый, только что декодированный PCM!
                 if (m_writeToFile) {
                     openFiles();
                     m_unixFileReceiverNet.write(pcmChunk);
                     m_unixSizeReceiverNet += pcmChunk.size();
                 }
             } else {
-                qWarning() << "@@@ [Opus] Ошибка декодирования кадра:" << decodedSamples;
                 continue;
             }
         } else {
             continue;
         }
 
-        // Расчет уровня громкости для ползунка/шкалы интерфейса Qt
-        int len = pcmChunk.size();
-        int currentVolume = 0;
-        const short *ptr = reinterpret_cast<const short*>(pcmChunk.constData());
-        for (int i = 0; i < len / 2; ++i) {
-            int sample = ptr[i];
+        int samplesCount = pcmChunk.size() / sizeof(short);
+        short *pcmPtr = reinterpret_cast<short*>(pcmChunk.data());
+
+        // ------------------------------------------------------------------------
+        // СБОР МЕТРИК ЗВУКА И ОПРЕДЕЛЕНИЕ ЧАСТОТЫ СВИСТА
+        // ------------------------------------------------------------------------
+        int zeroCrossings = 0;
+        int maxAmp = 0;
+
+        for (int i = 0; i < samplesCount; ++i) {
+            int sample = pcmPtr[i];
             if (sample < 0) sample = -sample;
-            if (sample > currentVolume) currentVolume = sample;
-        }
-        currentVolume = (currentVolume * 100) / 32767;
-        if (currentVolume > 0) {
-            emit speakerVolumeMeasured(currentVolume);
+            if (sample > maxAmp) maxAmp = sample;
+            m_sampleCounter += sample;
+
+            if (i > 0) {
+                zeroCrossings += static_cast<int>((pcmPtr[i - 1] ^ pcmPtr[i]) < 0);
+            }
         }
 
-        // ПРИМЕНЯЕМ ОБНОВЛЕННЫЙ ФИЛЬТР БАТТЕРВОРТА (жесткий срез скрипов выше 4.5 кГц)
-        applyFilters(reinterpret_cast<short*>(pcmChunk.data()), pcmChunk.size() / 2);
+        int currentVolume = (maxAmp * 100) / 32767;
+        emit speakerVolumeMeasured(currentVolume);
+#if 0
+        // Детектор лавинообразного роста свиста
+        bool isFrequencyStable = (std::abs(zeroCrossings - m_lastZeroCrossings) <= 3);
+        bool isLoudEnough = (maxAmp > 1500);
+
+        if (isFrequencyStable && isLoudEnough && (maxAmp > m_lastMaxAmplitude)) {
+            m_consecutiveGrowthFrames++;
+        } else {
+            if (m_consecutiveGrowthFrames > 0) m_consecutiveGrowthFrames--;
+        }
+
+        m_lastZeroCrossings = zeroCrossings;
+        m_lastMaxAmplitude = maxAmp;
+
+        // Если лавина свиста разгоняется 8 кадров подряд — вычисляем частоту
+        if (m_whistle /*m_consecutiveGrowthFrames >= 8*/) {
+            m_notchFreq = static_cast<float>(zeroCrossings * 16000) / static_cast<float>(2 * samplesCount);
+            qWarning() << "@@@sound [DSP] Детектор обнаружил частоту свиста:" << m_notchFreq << "Гц";
+
+            // ВТОРОЙ РУБЕЖ ОБОРОНЫ: Если флаг активен, принудительно роняем общую громкость
+            if (m_preventWhistle) {
+                qWarning() << "@@@sound [DSP] Активирован автоматический глушитель громкости!";
+                m_autoVolumeAttenuator = 0.15f;
+            }
+
+            m_consecutiveGrowthFrames = 0;
+        } else {
+            // Если свист прекратился, плавно возвращаем громкость назад (+2% за фрейм)
+            if (m_autoVolumeAttenuator < 1.0f) {
+                m_autoVolumeAttenuator += 0.02f;
+                if (m_autoVolumeAttenuator > 1.0f) m_autoVolumeAttenuator = 1.0f;
+            }
+        }
+#endif
+        // ------------------------------------------------------------------------
+        // РУБЕЖ 1: ДИНАМИЧЕСКИЙ РЕЖЕКТОРНЫЙ NOTCH-ФИЛЬТР (ФЛАГ m_Notch)
+        // ------------------------------------------------------------------------
+        if (m_Notch) {
+            if(m_notchFreq > 100.0f && m_notchFreq < 7500.0f) {
+            float omega = (2.0f * M_PI * m_notchFreq) / 16000.0f;
+            float alpha = std::sin(omega) / (2.0f * 10.0f); // Q = 10.0
+
+            float b0 = 1.0f;
+            float b1 = -2.0f * std::cos(omega);
+            float b2 = 1.0f;
+            float a0 = 1.0f + alpha;
+            float a1 = -2.0f * std::cos(omega);
+            float a2 = 1.0f - alpha;
+
+            b0 /= a0; b1 /= a0; b2 /= a0; a1 /= a0; a2 /= a0;
+
+            for (int i = 0; i < samplesCount; ++i) {
+                float x0 = static_cast<float>(pcmPtr[i]);
+                float y0 = (b0 * x0) + (b1 * m_nz1) + (b2 * m_nz2) - (a1 * m_nz1) - (a2 * m_nz2);
+
+                m_nz2 = m_nz1;
+                m_nz1 = x0;
+
+                if (y0 > 32767.0f) y0 = 32767.0f;
+                if (y0 < -32768.0f) y0 = -32768.0f;
+
+                pcmPtr[i] = static_cast<short>(y0);
+            }
+            }
+            else {
+            m_nz1 = 0.0f; m_nz2 = 0.0f;
+            if (m_notchFreq > 0.0f) m_notchFreq *= 0.95f;
+             }
+        }
+        // ------------------------------------------------------------------------
+        // 3. ПРИМЕНЕНИЕ КИХ-ФИЛЬТРА СГЛАЖИВАНИЯ (Срез песка выше 4.5 КГц)
+        // ------------------------------------------------------------------------
+        if (samplesCount > 2) {
+            QByteArray filterCopy = pcmChunk;
+            const short *srcPtr = reinterpret_cast<const short*>(filterCopy.constData());
+            for (int i = 1; i < samplesCount - 1; ++i) {
+                int smoothed = (static_cast<int>(srcPtr[i - 1]) +
+                                static_cast<int>(srcPtr[i]) +
+                                static_cast<int>(srcPtr[i + 1])) / 3;
+                pcmPtr[i] = static_cast<short>(smoothed);
+            }
+        }
+
+        // ------------------------------------------------------------------------
+        // ПРИМЕНЕНИЕ ГРОМКОСТИ, ЭХО-ДЕМПИНГА И ДИНАМИЧЕСКОГО ГЛУШИТЕЛЯ
+        // ------------------------------------------------------------------------
+        float finalAttenuator = m_autoVolumeAttenuator;
+        if (m_micLevel == 0) {
+            finalAttenuator *= 0.4f; // Мягкий дуплексный демпинг
+        }
+
+        if (finalAttenuator < 1.0f) {
+            for (int i = 0; i < samplesCount; ++i) {
+                int adjusted = static_cast<int>(pcmPtr[i] * finalAttenuator);
+                if (adjusted > 32767) adjusted = 32767;
+                if (adjusted < -32768) adjusted = -32768;
+                pcmPtr[i] = static_cast<short>(adjusted);
+            }
+        }
 
         if (m_writeToFile) {
             openFiles();
@@ -443,7 +571,7 @@ void AudioWorker::onReadyReadUdp()
             m_unixSizeReceiverOut += pcmChunk.size();
         }
 
-        // Кладём очищенный и отфильтрованный PCM в буфер, откуда его плавно заберет динамик Oboe
+        // Отправляем в джиттер-очередь Oboe
         {
             QMutexLocker locker(&m_bufferMutex);
             m_jitterBuffer.enqueue(pcmChunk);
@@ -472,46 +600,91 @@ void AudioWorker::initAudio(const QString &targetIp)
     initOpus();
 
 #if defined(Q_OS_ANDROID)
+    qDebug() << "@@@ [Oboe] Инициализация сырого студийного потока микрофона...";
+
+    m_recordingStream.reset();
+    m_playbackStream.reset();
+
     // ------------------------------------------------------------------------
-    // СТАБИЛЬНЫЙ ЖЕЛЕЗОБЕТОННЫЙ ЗАХВАТ МИКРОФОНА (ЗАЩИТА ОТ ПОТЕРЬ КАДРОВ)
+    // НАСТРОЙКА МИКРОФОНА: СЫРОЙ НЕОБРАБОТАННЫЙ ПОТОК (Защита от дыр)
     // ------------------------------------------------------------------------
     oboe::AudioStreamBuilder recorderBuilder;
     recorderBuilder.setDirection(oboe::Direction::Input);
 
-    // Переводим микрофон из LowLatency в режим максимальной стабильности потока.
-    // Это заставит Android выделить глубокий системный буфер для захвата голоса.
+    // ОТКЛЮЧАЕМ агрессивный LowLatency. Пусть ОС отдает данные редкими, но большими и целыми блоками!
     recorderBuilder.setPerformanceMode(oboe::PerformanceMode::None);
     recorderBuilder.setSharingMode(oboe::SharingMode::Shared);
 
-    recorderBuilder.setSampleRate(16000);
+    // Ставим нативную частоту 44100 Гц. Это уберет системный ресемплер Android, который рвет звук
+    recorderBuilder.setSampleRate(44100);
     recorderBuilder.setChannelCount(1);
     recorderBuilder.setFormat(oboe::AudioFormat::I16);
 
-    // Возвращаем исходный пресет (выберите нужный: VoiceCommunication или Camcorder)
-    recorderBuilder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+    // КРИТИЧНО: Пресет Unprocessed отключает абсолютно все телефонные шумодавы ОС
+    recorderBuilder.setInputPreset(oboe::InputPreset::Unprocessed);
 
     recorderBuilder.setDataCallback(this);
     recorderBuilder.setErrorCallback(this);
 
     oboe::Result recResult = recorderBuilder.openManagedStream(m_recordingStream);
     if (recResult != oboe::Result::OK) {
-        qWarning() << "@@@ [Oboe] Failed to open recording stream";
-    } else {
-        m_androidSessionId = m_recordingStream->getSessionId();
+        qCritical() << "@@@ [Oboe] Не удалось открыть микрофон:" << oboe::convertToText(recResult);
+        return;
+    }
+    m_androidSessionId = m_recordingStream->getSessionId();
 
-        // КРИТИЧЕСКИЙ ШАГ: Принудительно расширяем внутренний буфер записи Oboe в 4 раза!
-        // Это создаст глубокий резервуар прямо в аудио-драйвере Android.
-        // Пока Qt обрабатывает сеть или графику, звук будет монолитно копиться в этой подушке.
-        int32_t burstSize = m_recordingStream->getFramesPerBurst();
-        // Если это планшет — даем ему максимальный запас (x8), так как его процессор медленнее.
-        // Для телефона Poco X7 оставляем стабильный x6.
+    // Запрашиваем у аудиоплаты глубокий резервуар для накопления звука (x8)
+    int32_t recBurstSize = m_recordingStream->getFramesPerBurst();
+    m_recordingStream->setBufferSizeInFrames(recBurstSize * 8);
+    qDebug() << "@@@ [Oboe] Микрофон успешно открыт на 44100 Гц в режиме Unprocessed";
+
+    // ------------------------------------------------------------------------
+    // ШАГ 2: НАСТРОЙКА И ОТКРЫТИЕ ДИНАМИКА (ПЕРЕДАЧА ПО ССЫЛКЕ)
+    // ------------------------------------------------------------------------
+    oboe::AudioStreamBuilder playbackBuilder;
+    playbackBuilder.setDirection(oboe::Direction::Output);
+
+    if (isTablet) {
+        playbackBuilder.setPerformanceMode(oboe::PerformanceMode::None);
+        playbackBuilder.setSharingMode(oboe::SharingMode::Shared);
+    } else {
+        playbackBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        playbackBuilder.setSharingMode(oboe::SharingMode::Exclusive);
+    }
+
+    playbackBuilder.setSampleRate(16000);
+    playbackBuilder.setChannelCount(1);
+    playbackBuilder.setFormat(oboe::AudioFormat::I16);
+
+    playbackBuilder.setUsage(oboe::Usage::VoiceCommunication);
+    playbackBuilder.setContentType(oboe::ContentType::Speech);
+    playbackBuilder.setDataCallback(this);
+    playbackBuilder.setErrorCallback(this);
+
+    // Связываем сессию воспроизведения с глобальным микшером звонков Android
+    playbackBuilder.setSessionId(oboe::SessionId::Allocate);
+
+    // Вызов СТРОГО по сигнатуре: передаем ссылку на m_playbackStream в качестве аргумента
+    oboe::Result playResult = playbackBuilder.openManagedStream(m_playbackStream);
+
+    if (playResult != oboe::Result::OK) {
+        qCritical() << "@@@ [Oboe] Ошибка открытия динамика по ссылке:" << oboe::convertToText(playResult);
+        return;
+    }
+
+    // Проверяем валидность инициализации
+    if (m_playbackStream) {
+        int32_t playBurstSize = m_playbackStream->getFramesPerBurst();
         if (isTablet) {
-            m_recordingStream->setBufferSizeInFrames(burstSize * 8);
-            qDebug() << "@@@ [Oboe] Планшет: буфер захвата микрофона расширен до максимума:" << (burstSize * 8);
+            m_playbackStream->setBufferSizeInFrames(playBurstSize * 4);
         } else {
-            m_recordingStream->setBufferSizeInFrames(burstSize * 6);
-            qDebug() << "@@@ [Oboe] Телефон: буфер захвата микрофона расширен до:" << (burstSize * 6);
-        }    }
+            m_playbackStream->setBufferSizeInFrames(playBurstSize * 2);
+        }
+        qDebug() << "@@@ [Oboe] Поток m_playbackStream УСПЕШНО инициализирован и готов к работе!";
+    } else {
+        qCritical() << "@@@ [Oboe] Крах: Функция вернула OK, но m_playbackStream остался равен 0!";
+    }
+
 #else
     // НАСТРОЙКА QT MULTIMEDIA ДЛЯ ДЕСКТОПА
     QAudioFormat format;
@@ -532,29 +705,34 @@ void AudioWorker::initAudio(const QString &targetIp)
     }
 #endif
 }
-
-
 void AudioWorker::startAudio()
 {
-    qDebug() << "@@@ [Worker] Starting audio streams";
-
-    setAndroidVoipMode(true, m_androidSessionId);
+    qDebug() << "@@@ [Worker] Запуск воспроизведения звука Oboe...";
+    m_maxNoWhistleLevel = m_speakerLevel;
+    // Включаем нативный Voip-режим Android
+    setAndroidVoipMode(true, 0);
 
 #if defined(Q_OS_ANDROID)
     if (m_playbackStream) {
-        m_playbackStream->requestStart();
+        oboe::Result result = m_playbackStream->requestStart();
+        if (result != oboe::Result::OK) {
+            qCritical() << "@@@ [Oboe] ОшибкаrequestStart динамика:" << oboe::convertToText(result);
+        } else {
+            qDebug() << "@@@ [Oboe] Динамик успешно переведен в режим Started!";
+        }
     }
+
     if (m_recordingStream) {
-        m_recordingStream->requestStart();
+        oboe::Result result = m_recordingStream->requestStart();
+        if (result != oboe::Result::OK) {
+            qCritical() << "@@@ [Oboe] Ошибка requestStart микрофона:" << oboe::convertToText(result);
+        } else {
+            qDebug() << "@@@ [Oboe] Микрофон успешно переведен в режим Started!";
+        }
     }
 #else
     m_audioOutputDevice = m_audioSink->start();
     m_audioInputDevice = m_audioSource->start();
-
-    if (!m_audioInputDevice) {
-        qWarning() << "@@@ [Worker] Failed to open audio input device!";
-        return;
-    }
 
     if (m_playbackTimer) {
         m_playbackTimer->start(20);
@@ -572,6 +750,9 @@ void AudioWorker::startAudio()
 
 #include <algorithm>
 
+#include <algorithm>
+#include <cmath>
+
 oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStream, void *audioData, int32_t numFrames)
 {
     if (m_isMuted || !audioData || numFrames <= 0) {
@@ -584,15 +765,31 @@ oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStrea
     int bytesNeeded = numFrames * sizeof(short);
 
     // ------------------------------------------------------------------------
-    // ПОТОК МИКРОФОНА: НАКОПЛЕНИЕ И СЖАТИЕ В OPUS
+    // ОБРАБОТКА ВВОДА: Микрофон (МАКСИМАЛЬНО ОБЛЕГЧЕННЫЙ ПОТОК)
     // ------------------------------------------------------------------------
     if (audioStream->getDirection() == oboe::Direction::Input) {
-        QByteArray data16k(reinterpret_cast<const char*>(audioData), bytesNeeded);
+        const short *inputBuffer44k = reinterpret_cast<const short*>(audioData);
+
+        int samples16kCount = static_cast<int>(numFrames * 16000.0f / 44100.0f);
+        QByteArray data16k;
+        data16k.resize(samples16kCount * sizeof(short));
+        short *data16kPtr = reinterpret_cast<short*>(data16k.data());
+
+        for (int i = 0; i < samples16kCount; ++i) {
+            int srcIndex = static_cast<int>(i * 44100.0f / 16000.0f);
+            if (srcIndex < numFrames) {
+                data16kPtr[i] = inputBuffer44k[srcIndex];
+            } else {
+                data16kPtr[i] = 0;
+            }
+        }
 
         if (m_writeToFile) {
             openFiles();
             m_unixFileSenderIn.write(data16k);
             m_unixSizeSenderIn += data16k.size();
+            m_unixFileSenderNet.write(data16k);
+            m_unixSizeSenderNet += data16k.size();
         }
 
         static QByteArray micAccumulator;
@@ -602,47 +799,6 @@ oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStrea
             QByteArray chunk = micAccumulator.left(640);
             micAccumulator.remove(0, 640);
 
-            int len = chunk.size();
-            int currentVolume = 0;
-            short *pcmPtr = reinterpret_cast<short*>(chunk.data());
-
-            for (int i = 0; i < len / 2; ++i) {
-                int sample = pcmPtr[i];
-                if (sample < 0) sample = -sample;
-                if (sample > currentVolume) currentVolume = sample;
-            }
-            currentVolume = (currentVolume * 100) / 32767;
-            emit micVolumeMeasured(currentVolume);
-
-            // Мягкий эхо-демпинг
-            bool isPartnerSpeaking = false;
-            {
-                QMutexLocker locker(&m_bufferMutex);
-                isPartnerSpeaking = !m_jitterBuffer.isEmpty();
-            }
-
-            if (isPartnerSpeaking) {
-                for (int i = 0; i < len / 2; ++i) {
-                    pcmPtr[i] = static_cast<short>(pcmPtr[i] * 0.35f);
-                }
-            } else if (m_micLevel != 30) {
-                float factor = static_cast<float>(m_micLevel) / 100.0f;
-                for (int i = 0; i < len / 2; ++i) {
-                    int calculatedSample = static_cast<int>(pcmPtr[i] * factor);
-                    if (calculatedSample > 32767) calculatedSample = 32767;
-                    if (calculatedSample < -32768) calculatedSample = -32768;
-                    pcmPtr[i] = static_cast<short>(calculatedSample);
-                }
-            }
-
-            // ИСПРАВЛЕНО: Записываем в WAV-файл ЧИСТЫЙ PCM (chunk) вместо сжатых байт!
-            if (m_writeToFile) {
-                openFiles();
-                m_unixFileSenderNet.write(chunk);
-                m_unixSizeSenderNet += chunk.size();
-            }
-
-            // Кодируем фрейм в Opus для передачи по сети
             if (m_opusEncoder && m_udpSender && !m_targetIp.isEmpty()) {
                 QByteArray compressed;
                 compressed.resize(4000);
@@ -650,14 +806,13 @@ oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStrea
                 int compressedBytes = opus_encode(
                     reinterpret_cast<OpusEncoder*>(m_opusEncoder),
                     reinterpret_cast<const opus_int16*>(chunk.constData()),
-                    320, // 20 мс фрейм
+                    320,
                     reinterpret_cast<unsigned char*>(compressed.data()),
                     compressed.size()
                     );
 
                 if (compressedBytes > 0) {
                     compressed.resize(compressedBytes);
-                    // Отправляем сжатый пакет по сети
                     m_udpSender->writeDatagram(compressed, QHostAddress(m_targetIp), 28002);
                 }
             }
@@ -665,7 +820,7 @@ oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStrea
     }
 
     // ------------------------------------------------------------------------
-    // ПОТОК ДИНАМИКА: АДАПТИВНЫЙ БУФЕР СГЛАЖИВАНИЯ
+    // ПОТОК ДИНАМИКА: Стабильное чтение из сетевого буфера (Без изменений)
     // ------------------------------------------------------------------------
     if (audioStream->getDirection() == oboe::Direction::Output) {
         short *outputBuffer = reinterpret_cast<short*>(audioData);
@@ -949,7 +1104,7 @@ void AudioWorker::freeOpus()
 void AudioWorker::setMute(bool mute) { m_isMuted = mute; }
 void AudioWorker::setEchoTest(bool enable) { m_isEchoTestMode = enable; }
 
-void AudioEngine::setSpeakerLevel(int level, bool save, bool sign) {
+void AudioEngine::setSpeakerLevel(int level, bool save, bool automatic) {
     if (level == 0)
         qCritical() << "@@@sound speak=00000000000000000000";
     if (remoteControl)
@@ -961,20 +1116,85 @@ void AudioEngine::setSpeakerLevel(int level, bool save, bool sign) {
     m_worker->setSpeakerLevel(level);
 
     // Рассчитываем абсолютную громкость на основе лимитов потока звонка
-    setAndroidAbsoluteSpeakerVolume(level * m_maxSpeakerLevel / 100.0f);
-
+    //setAndroidAbsoluteSpeakerVolume(level * m_maxSpeakerLevel / 100.0f);
+    setSpeakerVolumePercentage(level);
     if (save)
         saveConfigLevels();
 
-    qDebug() << "@@@sound setSpeakerLevel" << level << m_maxSpeakerLevel << save << sign;
-    if (sign)
+    qDebug() << "@@@sound setSpeakerLevel" << level << m_maxSpeakerLevel << save << automatic;
+    if (automatic)
         emit remoteSetSpeakerLevel(level);
+    else m_maxNoWhistleLevel = level;
 }
 
 void AudioEngine::setWriteToFile(bool w)
 {
     m_writeToFile = w;
     qDebug() << "@@@sound setWriteToFile=" << w;
+}
+void AudioWorker::detectAndSuppressWhistle(short *samples, int count)
+{
+    if (count <= 0) return;
+
+    int zeroCrossings = 0;
+    int maxAmp = 0;
+
+    // 1. Считаем количество переходов через ноль и ищем пиковую амплитуду кадра
+    for (int i = 1; i < count; ++i) {
+        // Если знаки соседних сэмплов разные — волна пересекла ноль
+        if ((samples[i - 1] >= 0 && samples[i] < 0) || (samples[i - 1] < 0 && samples[i] >= 0)) {
+            zeroCrossings++;
+        }
+
+        int absSample = samples[i] < 0 ? -samples[i] : samples[i];
+        if (absSample > maxAmp) {
+            maxAmp = absSample;
+        }
+    }
+
+    // 2. Анализируем стабильность частоты (с допуском микро-погрешности в 3 перехода)
+    bool isFrequencyStable = (std::abs(zeroCrossings - m_lastZeroCrossings) <= 3);
+
+    // Порог тишины: детектор не должен срабатывать, если в комнате просто тихо (шумы ниже ~3% громкости)
+    bool isLoudEnough = (maxAmp > 1000);
+
+    if (isFrequencyStable && isLoudEnough && (maxAmp > m_lastMaxAmplitude)) {
+        // Амплитуда растет на одной и той же частоте! Накапливаем счетчик опасности
+        m_consecutiveGrowthFrames++;
+    } else {
+        // Естественное колебание речи или пауза — плавно сбрасываем счетчик
+        if (m_consecutiveGrowthFrames > 0) m_consecutiveGrowthFrames--;
+    }
+
+    // Сохраняем значения для следующего кадра
+    m_lastZeroCrossings = zeroCrossings;
+    m_lastMaxAmplitude = maxAmp;
+
+    // 3. РЕАКЦИЯ: Если звук монотонно растет 8 кадров подряд (~160 мс) — это начало свиста!
+    if (m_consecutiveGrowthFrames >= 8) {
+        qWarning() << "@@@ [DSP] Обнаружено начало развития свиста! Глушим поток. Пересечений нуля:" << zeroCrossings;
+
+        // Мгновенно зажимаем громкость до 15%, пресекая свист в зародыше
+        m_autoVolumeAttenuator = 0.15f;
+
+        // Сбрасываем счетчик, чтобы дать системе шанс перепроверить звук в следующем цикле
+        m_consecutiveGrowthFrames = 0;
+    }
+    else {
+        // Если свист прекратился, плавно (по 2% за кадр) возвращаем громкость к исходной,
+        // чтобы у пользователя не было ощущения резкого обрыва связи
+        if (m_autoVolumeAttenuator < 1.0f) {
+            m_autoVolumeAttenuator += 0.02f;
+            if (m_autoVolumeAttenuator > 1.0f) m_autoVolumeAttenuator = 1.0f;
+        }
+    }
+
+    // 4. Применяем наш динамический аттенюатор к текущим сэмплам
+    if (m_autoVolumeAttenuator < 1.0f) {
+        for (int i = 0; i < count; ++i) {
+            samples[i] = static_cast<short>(samples[i] * m_autoVolumeAttenuator);
+        }
+    }
 }
 
 // ------------------------------------------------------------------------
@@ -1037,4 +1257,179 @@ void setAndroidSystemMicMute(bool mute) {
         audioManager.callMethod<void>("setMicrophoneMute", "(Z)V", (jboolean)mute);
     }
 #endif
+}
+#include <QCoreApplication>
+#include <QJniObject>
+#include <QJniEnvironment>
+#include <QDebug>
+#include <algorithm>
+
+int getSpeakerVolumePercentage() {
+#ifdef Q_OS_ANDROID
+    // 1. Получаем текущую активность Android (контекст)
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative",
+        "activity",
+        "()Landroid/app/Activity;"
+        );
+
+    if (!activity.isValid()) {
+        qWarning() << "Ошибка: Не удалось получить Android Activity context.";
+        return -1;
+    }
+
+    // 2. Получаем константу названия аудио-сервиса (Context.AUDIO_SERVICE)
+    QJniObject audioServiceName = QJniObject::getStaticObjectField(
+        "android/content/Context",
+        "AUDIO_SERVICE",
+        "Ljava/lang/String;"
+        );
+
+    // 3. Запрашиваем системный сервис AudioManager
+    QJniObject audioManager = activity.callObjectMethod(
+        "getSystemService",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+        audioServiceName.object<jstring>()
+        );
+
+    if (!audioManager.isValid()) {
+        qWarning() << "Ошибка: Системный сервис AudioManager недоступен.";
+        return -1;
+    }
+
+    /*
+       4. Выбираем тип потока:
+       STREAM_VOICE_CALL (0) -> Разговорный динамик (спикер для звонков)
+       STREAM_MUSIC (3)      -> Основной динамик (Мультимедиа/Музыка)
+    */
+    jint STREAM_TYPE = QJniObject::getStaticField<jint>(
+        "android/media/AudioManager",
+        "STREAM_VOICE_CALL"
+        );
+
+    // 5. Получаем текущую и максимальную громкость через JNI
+    jint currentVolume = audioManager.callMethod<jint>(
+        "getStreamVolume",
+        "(I)I",
+        STREAM_TYPE
+        );
+
+    jint maxVolume = audioManager.callMethod<jint>(
+        "getStreamMaxVolume",
+        "(I)I",
+        STREAM_TYPE
+        );
+
+    // Проверяем на ошибки JNI после вызовов
+    QJniEnvironment env;
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        qWarning() << "Ошибка: Произошло исключение при вызове методов AudioManager.";
+        return -1;
+    }
+
+    // 6. Расчет процентов с защитой от деления на ноль
+    if (maxVolume <= 0) {
+        return 0;
+    }
+
+    int percentage = (currentVolume * 100) / maxVolume;
+    return std::clamp(percentage, 0, 100);
+#else
+    return 100;
+#endif
+}
+//#include <QJniObject>
+//#include <QJniEnvironment>
+//#include <QDebug>
+//#include <algorithm>
+
+bool setSpeakerVolumePercentage(int percentage) {
+#ifdef Q_OS_ANDROID
+
+    // 1. Ограничиваем входящие проценты диапазоном [0, 100]
+    percentage = std::clamp(percentage, 0, 100);
+
+    // 2. Получаем Android Activity context
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative",
+        "activity",
+        "()Landroid/app/Activity;"
+        );
+
+    if (!activity.isValid()) {
+        qWarning() << "Ошибка: Не удалось получить Android Activity.";
+        return false;
+    }
+
+    // 3. Получаем AudioManager
+    QJniObject audioServiceName = QJniObject::getStaticObjectField(
+        "android/content/Context",
+        "AUDIO_SERVICE",
+        "Ljava/lang/String;"
+        );
+
+    QJniObject audioManager = activity.callObjectMethod(
+        "getSystemService",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+        audioServiceName.object<jstring>()
+        );
+
+    if (!audioManager.isValid()) {
+        qWarning() << "Ошибка: AudioManager недоступен.";
+        return false;
+    }
+
+    // 4. Задаем тип потока (Разговорный динамик: STREAM_VOICE_CALL)
+    jint STREAM_TYPE = QJniObject::getStaticField<jint>(
+        "android/media/AudioManager",
+        "STREAM_VOICE_CALL"
+        );
+
+    // 5. Узнаем максимальный шаг громкости для этого потока
+    jint maxVolume = audioManager.callMethod<jint>(
+        "getStreamMaxVolume",
+        "(I)I",
+        STREAM_TYPE
+        );
+
+    if (maxVolume <= 0) {
+        return false;
+    }
+
+    // 6. Переводим проценты в абсолютный шаг шкалы Android
+    // Добавляем (100 / 2) для корректного математического округления
+    jint targetVolume = (percentage * maxVolume + 50) / 100;
+    targetVolume = std::clamp(targetVolume, 0, maxVolume);
+
+    /*
+       7. Выставляем флаги визуализации (Флаги AudioManager):
+       FLAG_SHOW_UI (1)     -> Показывать ли стандартный системный ползунок громкости на экране.
+       FLAG_PLAY_SOUND (4)  -> Воспроизводить ли звуковой "пик" при изменении (для STREAM_VOICE_CALL обычно 0).
+       Если хотите менять громкость скрытно, передайте последним параметром просто цифру 0.
+    */
+    jint FLAGS = QJniObject::getStaticField<jint>("android/media/AudioManager", "FLAG_SHOW_UI");
+
+    // 8. Записываем новое значение громкости
+    audioManager.callMethod<void>(
+        "setStreamVolume",
+        "(III)V",
+        STREAM_TYPE,
+        targetVolume,
+        FLAGS
+        );
+
+    // Проверяем JNI на исключения
+    QJniEnvironment env;
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        qWarning() << "Ошибка: Исключение Android при изменении громкости.";
+        return false;
+    }
+
+    return true;
+#else
+    return true;
+#endif
+
 }

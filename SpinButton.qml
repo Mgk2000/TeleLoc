@@ -7,8 +7,8 @@ Rectangle {
     property string symbol: "+"
     property bool isPressed: false
 
-    width: parent.height
-    height: parent.height
+    width: parent.width
+    height: width
 
     // Цвета по умолчанию (темно-зеленый)
     color: isPressed ? "#0A3622" : "#0F5132"

@@ -79,6 +79,7 @@ void myMessageHandler(QtMsgType type, const QMessageLogContext &context, const Q
     case QtFatalMsg:
         fprintf(stderr, "Fatal: %s (%s:%u, %s)\n", localMsg.constData(), context.file, context.line, context.function);
         abort();
+    default:;
     }
 }
 #if 0

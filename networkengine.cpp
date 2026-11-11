@@ -439,7 +439,7 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
         emit peerListChanged();
     }
     else if (type == "start_audio_recording") {
-        qDebug() << "@@@- [NetworkEngine] Получена сетевая команда! Включаем запись Получателя.";
+        qDebug() << "@@@aound [NetworkEngine] Получена сетевая команда! Включаем запись Получателя.";
         // Вызываем AudioEngine в роли получателя
  //       if (audioEngine->writeToFile)
  //       audioEngine->startWriteToFile("receiver");

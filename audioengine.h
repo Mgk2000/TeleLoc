@@ -65,9 +65,12 @@ public:
     void onErrorAfterClose(oboe::AudioStream *audioStream, oboe::Result error) override;
 #endif
 
+
 signals:
     void micVolumeMeasured(int volume);
     void speakerVolumeMeasured(int volume);
+
+    void NotchChanged();
 
 private slots:
     void onReadyReadUdp();
@@ -110,7 +113,17 @@ private:
     QIODevice *m_audioOutputDevice = nullptr;
     QTimer *m_playbackTimer = nullptr;
 #endif
+private:
+    // Переменные для детектора свиста
+    int m_lastZeroCrossings = 0;   // Предыдущее количество пересечений нуля
+    int m_consecutiveGrowthFrames = 0; // Счетчик кадров непрерывного роста
+    int m_lastMaxAmplitude = 0;    // Предыдущая максимальная амплитуда
+    float m_autoVolumeAttenuator = 1.0f; // Динамический множитель громкости (1.0 = норма, 0.2 = зажато)
+    // Управление Notch-фильтром
+    float m_notchFreq = 0.0f;      // Текущая обнаруженная частота свиста
 
+    // Переменные истории для Notch-фильтра (2-й порядок требует 2 сэмпла истории)
+    float m_nz1 = 0.0f, m_nz2 = 0.0f;
     QQueue<QByteArray> m_jitterBuffer;
     QMutex m_bufferMutex;
     int m_minJitterPackets = 3;
@@ -132,6 +145,7 @@ private:
 
     float m_x1 = 0.0f, m_x2 = 0.0f;
     float m_y1 = 0.0f, m_y2 = 0.0f;
+    void detectAndSuppressWhistle(short *samples, int count);
 };
 
 // ============================================================================
@@ -169,6 +183,8 @@ public:
     Q_INVOKABLE int getRemoteSpeakerLevel() const;
     Q_INVOKABLE void setRemoteSpeakerLevel(int newRemoteSpeakerLevel);
     Q_INVOKABLE void setNoiseSuppress(bool sup);
+    Q_INVOKABLE void setNotch(bool bn);
+    Q_INVOKABLE void setPreventWhistle(bool bn);
 signals:
     void micVolumeUpdated(int volume);
     void netVolumeUpdated(int volume);
@@ -197,15 +213,16 @@ private slots:
 #include <QCoreApplication>
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
-#include <QJniEnvironment>
+#include <QJniEnvironment>2
 #include <QAudioSource>
 #include <QAudioSink>
 #endif
 
 int getAndroidAbsoluteSpeakerVolume();
+int getSpeakerVolumePercentage();
 using namespace QNativeInterface;
 void setAndroidAbsoluteSpeakerVolume(int volume);
 int getAndroidMaxSpeakerVolume();
 void setAndroidSystemMicMute(bool mute);
-
+bool setSpeakerVolumePercentage(int percentage);
 #endif // AUDIOENGINE_H

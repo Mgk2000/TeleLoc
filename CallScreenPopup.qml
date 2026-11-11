@@ -388,7 +388,6 @@ Popup {
 
             onCheckedChanged: {
                 netEngine.setRemoteControl(checked)
-                console.log("@@@sound NoiseSuppress=", checked)
                 var m = audioEngine.getMicLevel()
                 var s = audioEngine.getSpeakerLevel()
                 var rm = audioEngine.getRemoteMicLevel()
@@ -441,7 +440,7 @@ Popup {
             Layout.preferredWidth: 60
             Layout.preferredHeight: 60
             checkable: true
-            checked: false
+            checked: true
             background: Rectangle {
                 color: noisesuppreessbutton.checked ? "#770000" : "#cccccc"
                 border.color: noisesuppreessbutton.checked ? "#bb0000" : "#224466"
@@ -456,7 +455,32 @@ Popup {
             }
             onCheckedChanged: {
                 console.log("@@@sound QML NoiseSuppress=", checked)
+                //audioEngine.setNoiseSuppress(checked)
                 audioEngine.setNoiseSuppress(checked)
+            }
+
+        }
+        Button {
+            id : preventwhistlebutton
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
+            checkable: true
+            checked: true
+            background: Rectangle {
+                color: preventwhistlebutton.checked ? "#770000" : "#cccccc"
+                border.color: preventwhistlebutton.checked ? "#bb0000" : "#224466"
+                border.width: 6
+                radius: 8
+            }
+            contentItem: Item {
+                anchors.fill: parent
+                Text {
+                    text : "PW"
+                font.pixelSize: 28; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter;}
+            }
+            onCheckedChanged: {
+                console.log("@@@sound QML PrevenWhistlet=", checked)
+                audioEngine.setPreventWhistle(checked)
             }
 
         }
@@ -473,5 +497,6 @@ Popup {
     }
     onClosed: {
         remoteCheckbox.checked = false
+        btnRecord1.checked = false
     }
 }
