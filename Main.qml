@@ -93,6 +93,7 @@ ApplicationWindow {
             if (typeof btnRecord !== "undefined" && btnRecord)
                 btnRecord.checked = false
         }
+        function onShowAttenuator(val) {customCallScreen.setAttVal(val)}
     }
 
     // Главный контейнер страниц мессенджера

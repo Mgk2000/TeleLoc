@@ -34,7 +34,6 @@ NetworkEngine::NetworkEngine(QObject *parent)
     m_incomingRing = new QSoundEffect(this);
     m_incomingRing->setSource(QUrl("qrc:/qt/qml/TeleLoc/ringtone.wav"));
     m_incomingRing->setLoopCount(QSoundEffect::Infinite);
-
     qDebug() << "@@@ NetworkEngine::NetworkEngine 1";
 
 #ifndef Q_OS_ANDROID
@@ -300,6 +299,9 @@ QString NetworkEngine::getIpByName(const QString &name, int netType)
 }
 
 void NetworkEngine::handleVoipWakeup(const QString &callerName) {
+    globalSpeakerLevel = getSpeakerVolumePercentage(false);
+    setSpeakerVolumePercentage(false, 100, true);
+
     emit messageReceived("СИСТЕМА", "Приложение разбужено Java-интентом! Вызов от: " + callerName);
     m_incomingRing->play();
     qDebug() << "@@@incoming call from handleVoipWakeup";
@@ -419,11 +421,12 @@ void NetworkEngine::parseIncomingSyncData(const QByteArray &data, const QString 
     }
     else if (type == "stop_call") {
         qWarning() << "@@@parse stop_call" << name << callInfo.name;
-        if (name != callInfo.name)
+        if (name != callInfo.name && !name.isEmpty() && !callInfo.name.isEmpty())
             return;
         qDebug() << "@@@incomingCall from parse stop_call";
         m_ringbackTone->stop();
         m_incomingRing->stop();
+        setSpeakerVolumePercentage(false, globalSpeakerLevel, false);
         m_busyTone->stop();
         audioEngine->stop();
         setCallingState(CallInfo::idle);
@@ -517,7 +520,7 @@ void NetworkEngine::startAudioCall(const QString &name, int netType) {
 
 //    m_activeCallNetType = netType;
     callInfo.ip = targetIp;
-
+    callInfo.name = name;
     QJsonObject obj;
     obj["type"] = "incoming_call";
     obj["name"] = getSavedName();
@@ -536,6 +539,8 @@ void NetworkEngine::acceptAudioCall(const QString &targetPeerName, int netType) 
     UserInfo me = m_users.at(0);
     m_incomingRing->stop();
     setCallingState(CallInfo::speaking);
+    //setSpeakerVolumePercentage(false, globalSpeakerLevel, false);
+
     QJsonObject obj;
     obj["type"] = "accept_call";
     obj["name"] = me.name;
@@ -628,7 +633,7 @@ void NetworkEngine::stopAudioCall() {
     m_busyTone->stop();
     audioEngine->stop();
     setCallingState(CallInfo::idle);
-    callInfo.ip = "";
+    //callInfo.ip = "";
     callInfo.netType = -1;
     emit callStopped();
 }
@@ -740,6 +745,7 @@ void NetworkEngine::incomingCall()
     qDebug() << "@@@incomingCall incomingCall Busy=" << callInfo.busy() << callInfo.ip ;
     if (callInfo.busy())
         return;
+    globalSpeakerLevel =  getSpeakerVolumePercentage(false);
     setSpeakerVolumePercentage(false, 100, true);
     m_incomingRing->play();
     setCallingState(CallInfo::inCalling);

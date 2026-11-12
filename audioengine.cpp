@@ -14,6 +14,7 @@
 // ============================================================================
 // РЕАЛИЗАЦИЯ CONTROLLER (РАБОТАЕТ В MAIN/GUI ПОТОКЕ)
 // ============================================================================
+//namespace polipann {
 bool m_writeToFile = false;
 int m_savedMicLevel, m_savedSpeakerLevel;
 int remoteMicLevel, remoteSpeakerLevel;
@@ -23,14 +24,23 @@ bool noiseSuppressFlag = true; // По умолчанию включено дл�
 bool m_Notch = true;           // Флаг включения/выключения Notch-фильтра
 bool m_preventWhistle = true;
 qint64 m_sampleCounter = 0;
-int m_whistleLimit =10000000;
+int m_whistleLimit =250000000;
 int m_maxNoWhistleLevel;
 bool m_whistle;
 int m_whistleTicks;
 QJniObject audioManager;
 jint maxSpeakVolume, maxMusicVolume;
 jint VOICE_STREAM_TYPE, MUSIC_STREAM_TYPE;
+// Переменные вашего энергетического детектора
+long long m_yearlySampleSum = 0;    // Накопленная сумма модулей сэмплов за секунду
 
+float m_autoVolumeAttenuator = 1.0f; // Текущий коэффициент приглушения
+float m_maxAttenuatorLimit = 1.0f;   // Адаптивный верхний предел (то самое целевое значение)
+int m_cooldownSeconds = 0;  //
+int globalSpeakerLevel;
+bool useSpeakerPhone;
+//}
+//using namespace polipann;
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent)
     , m_worker(nullptr)
@@ -49,6 +59,7 @@ AudioEngine::AudioEngine(QObject *parent)
     // Перенаправляем замеры громкости из потока звука в GUI/QML интерфейс
     connect(m_worker, &AudioWorker::micVolumeMeasured, this, &AudioEngine::micVolumeUpdated);
     connect(m_worker, &AudioWorker::speakerVolumeMeasured, this, &AudioEngine::netVolumeUpdated);
+    connect(m_worker, SIGNAL(attSpeakerChanged(float)), this,  SLOT(saveAttenuatedSpeakerLevel(float)));;
 
     // 3. Запускаем поток обработки звука с наивысшим приоритетом
     m_workerThread.start(QThread::TimeCriticalPriority);
@@ -56,6 +67,7 @@ AudioEngine::AudioEngine(QObject *parent)
     speakerTimer.setInterval(1000);
     connect(&speakerTimer, SIGNAL(timeout()), this, SLOT(onSpeakerTick()));
     initConfigLevels();
+    useSpeakerPhone = isTablet;
 }
 
 AudioEngine::~AudioEngine()
@@ -66,9 +78,9 @@ AudioEngine::~AudioEngine()
 
 void AudioEngine::startRecording(const QString &targetIp)
 {
-    qDebug() << "@@@sound startRecording write=" << m_writeToFile;
     initConfigLevels();
-
+    qWarning() << "@@@sound startRecording write=" << m_writeToFile << "speaker=" << m_speakerLevel;
+    setSpeakerVolumePercentage(true, m_speakerLevel, useSpeakerPhone);
     // Синхронизируем базовые флаги перед запуском
     m_worker->setWriteToFile(m_writeToFile);
     m_worker->setEchoTest(m_isEchoTestMode);
@@ -84,7 +96,7 @@ void AudioEngine::startRecording(const QString &targetIp)
 
 void AudioEngine::stop()
 {
-    qDebug() << "@@@ [Controller] Requesting audio stop";
+    qDebug() << "@@@sound [Controller] Requesting audio stop";
     QMetaObject::invokeMethod(m_worker, &AudioWorker::stopAudio, Qt::QueuedConnection);
     speakerTimer.stop();
     netEngine->closeCallDialog();
@@ -204,27 +216,38 @@ void AudioEngine::onSpeakerTick()
 {
     m_whistle = m_sampleCounter > m_whistleLimit;
     if (m_whistle) {
-        qCritical() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter << getSpeakerVolumePercentage(true);
-        if (m_speakerLevel>=30 && (m_whistleTicks == 0 || m_whistleTicks >= 5))
+        qCritical() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter << (int)(m_autoVolumeAttenuator *100);
+        /*if (m_speakerLevel>=30 && (m_whistleTicks == 0 || m_whistleTicks >= 5))
             m_maxNoWhistleLevel -= 5;
             m_speakerLevel -=20;
             setSpeakerLevel(m_speakerLevel, true, true);
             if (m_whistleTicks  >=5) m_whistleTicks = 0;
-            else m_whistleTicks++;
+            else m_whistleTicks++;*/
         }
     else {
-        qDebug() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter  << getSpeakerVolumePercentage(true) << maxSpeakVolume << maxMusicVolume;
-        if (m_speakerLevel < m_maxNoWhistleLevel) {
+        //qDebug() << "@@@sound audio data=" << m_worker->speakerDataCount << m_sampleCounter  << (int)(m_autoVolumeAttenuator *100) << maxSpeakVolume << maxMusicVolume;
+        /*if (m_speakerLevel < m_maxNoWhistleLevel) {
                 m_speakerLevel += 5;
                 setSpeakerLevel(m_speakerLevel, true, true);
                 m_whistleTicks = 0;
-        }
+        }*/
     }
-    if (m_worker->wasSound && !m_worker->speakerDataCount) {
-        this->stop();
-    }
+    //if (m_worker->wasSound && !m_worker->speakerDataCount) {
+    //    this->stop();
+    //}
     m_worker->speakerDataCount = 0;
     m_sampleCounter = 0;
+    emit showAttenuator(m_autoVolumeAttenuator * 100);
+}
+
+void AudioEngine::saveAttenuatedSpeakerLevel(float l)
+{
+    int level = l;
+    l = l /5 * 5;
+    auto conf = readJsonConfig();
+    conf["speaker_level"] = level;
+    writeJsonConfig(conf);
+    qDebug() << "@@@sound AttenuatedSpeaker" << level;
 }
 
 // ============================================================================
@@ -449,27 +472,81 @@ void AudioWorker::onReadyReadUdp()
         int samplesCount = pcmChunk.size() / sizeof(short);
         short *pcmPtr = reinterpret_cast<short*>(pcmChunk.data());
 
-        // ------------------------------------------------------------------------
-        // СБОР МЕТРИК ЗВУКА И ОПРЕДЕЛЕНИЕ ЧАСТОТЫ СВИСТА
-        // ------------------------------------------------------------------------
-        int zeroCrossings = 0;
+        // Замер пиковой громкости для шкалы интерфейса Qt (оставляем, чтобы прыгал индикатор)
         int maxAmp = 0;
-
         for (int i = 0; i < samplesCount; ++i) {
             int sample = pcmPtr[i];
             if (sample < 0) sample = -sample;
             if (sample > maxAmp) maxAmp = sample;
-            m_sampleCounter += sample;
 
-            if (i > 0) {
-                zeroCrossings += static_cast<int>((pcmPtr[i - 1] ^ pcmPtr[i]) < 0);
+            // ------------------------------------------------------------------------
+            // ВАШ АЛГОРИТМ: ИНТЕГРАЛЬНОЕ НАКОПЛЕНИЕ ЭНЕРГИИ ЗВУКА
+            // ------------------------------------------------------------------------
+            if (m_preventWhistle) {
+                m_yearlySampleSum += sample; // Суммируем модули сэмплов
+                m_sampleCounter++;
             }
         }
 
         int currentVolume = (maxAmp * 100) / 32767;
         emit speakerVolumeMeasured(currentVolume);
+
         // ------------------------------------------------------------------------
-        // 3. ПРИМЕНЕНИЕ КИХ-ФИЛЬТРА СГЛАЖИВАНИЯ (Срез песка выше 4.5 КГц)
+        // ПРОВЕРКА ЛИМИТА ЗА СЕКУНДУ (16000 сэмплов для частоты 16кГц)
+        // ------------------------------------------------------------------------
+        // ------------------------------------------------------------------------
+        // ПРОВЕРКА ЛИМИТА ЗА СЕКУНДУ С ПАУЗОЙ НА ЗАТУХАНИЕ ШУМА (5 СЕКУНД)
+        // ------------------------------------------------------------------------
+        if (m_preventWhistle && m_sampleCounter >= 16000) {
+
+            // Если мы находимся в режиме ожидания (ждем, пока эхо/шум улягутся)
+            if (m_cooldownSeconds > 0) {
+                m_cooldownSeconds--;
+                qDebug() << "@@@sound [DSP] Ждем затухания шума. Осталось секунд:" << m_cooldownSeconds
+                         << "Текущая сумма:" << m_yearlySampleSum;
+
+                // Если шум ушел досрочно — можем сразу прервать ожидание и начать плавный возврат
+                if (m_yearlySampleSum <= m_whistleLimit) {
+                    m_cooldownSeconds = 0;
+                }
+            }
+            // Режим штатного контроля (ожидание завершено или не требовалось)
+            else {
+                if (m_yearlySampleSum > m_whistleLimit) {
+                    qWarning() << "@@@sound [DSP] Шум не ушел! Сумма:" << m_yearlySampleSum << "Снижаем громкость вдвое.";
+
+                    // Запоминаем 0.9 от уровня, на котором возникла перегрузка (если еще не занизили)
+                    if (m_autoVolumeAttenuator * 0.9f < m_maxAttenuatorLimit) {
+                        m_maxAttenuatorLimit = m_autoVolumeAttenuator * 0.9f;
+                    }
+
+                    // Резко уменьшаем аттенюатор в 2 раза
+                    m_autoVolumeAttenuator *= 0.5f;
+                    if (m_autoVolumeAttenuator < 0.05f) m_autoVolumeAttenuator = 0.05f;
+
+                    // Запускаем таймер ожидания на 5 секунд, чтобы дать шуму время стихнуть
+                    m_cooldownSeconds = 5;
+
+                } else {
+                    // Шум полностью ушел — плавно возвращаем громкость в 1.1 раза до нового потолка (0.9)
+                    emit attSpeakerChanged(m_speakerLevel * m_autoVolumeAttenuator);
+                    if (m_autoVolumeAttenuator < m_maxAttenuatorLimit) {
+                        m_autoVolumeAttenuator *= 1.1f;
+                        if (m_autoVolumeAttenuator > m_maxAttenuatorLimit) {
+                            m_autoVolumeAttenuator = m_maxAttenuatorLimit;
+                        }
+                    }
+                    //qDebug() << "@@@sound [DSP] Шум ушел! Сумма:" << m_yearlySampleSum << "att=" << (int)(m_autoVolumeAttenuator* 100);
+                }
+            }
+
+            // Сбрасываем накопители на следующую секунду
+            m_yearlySampleSum = 0;
+            m_sampleCounter = 0;
+        }
+
+        // ------------------------------------------------------------------------
+        // 3. КИХ-ФИЛЬТР СГЛАЖИВАНИЯ (Срез песка выше 4.5 КГц, оставляем для чистоты)
         // ------------------------------------------------------------------------
         if (samplesCount > 2) {
             QByteArray filterCopy = pcmChunk;
@@ -481,24 +558,28 @@ void AudioWorker::onReadyReadUdp()
                 pcmPtr[i] = static_cast<short>(smoothed);
             }
         }
-        if (m_Notch){
+
         // ------------------------------------------------------------------------
-        // ПРИМЕНЕНИЕ ГРОМКОСТИ, ЭХО-ДЕМПИНГА И ДИНАМИЧЕСКОГО ГЛУШИТЕЛЯ
+        // ПРИМЕНЕНИЕ ИТОГОВОГО КОЭФФИЦИЕНТА ГРОМКОСТИ К КАДРУ
         // ------------------------------------------------------------------------
-        float finalAttenuator = m_autoVolumeAttenuator;
-        if (m_micLevel == 0) {
-            finalAttenuator *= 0.4f; // Мягкий дуплексный демпинг
+        float finalFactor = 1.0f;
+        if (m_preventWhistle) {
+            finalFactor = m_autoVolumeAttenuator;
         }
 
-        if (finalAttenuator < 1.0f) {
+        if (m_micLevel == 0) {
+            finalFactor *= 0.4f; // Дополнительный дуплексный демпинг в паузах
+        }
+
+        if (finalFactor < 1.0f) {
             for (int i = 0; i < samplesCount; ++i) {
-                int adjusted = static_cast<int>(pcmPtr[i] * finalAttenuator);
+                int adjusted = static_cast<int>(pcmPtr[i] * finalFactor);
                 if (adjusted > 32767) adjusted = 32767;
                 if (adjusted < -32768) adjusted = -32768;
                 pcmPtr[i] = static_cast<short>(adjusted);
             }
         }
-        }
+
         if (m_writeToFile) {
             openFiles();
             m_unixFileReceiverOut.write(pcmChunk);
@@ -516,11 +597,13 @@ void AudioWorker::onReadyReadUdp()
     }
 }
 
+
 namespace oboe_lib = oboe;
 
 void AudioWorker::initAudio(const QString &targetIp)
 {
     m_targetIp = targetIp;
+    setAndroidVoipMode(true, 0);
 
     if (!m_udpReceiver) {
         m_udpReceiver = new QUdpSocket(this);
@@ -642,9 +725,10 @@ void AudioWorker::initAudio(const QString &targetIp)
 void AudioWorker::startAudio()
 {
     qDebug() << "@@@ [Worker] Запуск воспроизведения звука Oboe...";
+    m_autoVolumeAttenuator = 1.0;
     m_maxNoWhistleLevel = m_speakerLevel;
     // Включаем нативный Voip-режим Android
-    setAndroidVoipMode(true, 0);
+    //setAndroidVoipMode(true, 0);
 
 #if defined(Q_OS_ANDROID)
     if (m_playbackStream) {
@@ -807,13 +891,11 @@ oboe::DataCallbackResult AudioWorker::onAudioReady(oboe::AudioStream *audioStrea
 }
 void AudioWorker::onErrorAfterClose(oboe::AudioStream *audioStream, oboe::Result error)
 {
-    qWarning() << "@@@ [Oboe] Stream error encountered:" << oboe::convertToText(error) << ". Re-initializing audio.";
-    if (error == oboe::Result::ErrorDisconnected) {
-        QMetaObject::invokeMethod(this, [this]() {
-                initAudio(m_targetIp);
-                startAudio();
-            }, Qt::QueuedConnection);
-    }
+    Q_UNUSED(audioStream);
+    qWarning() << "@@@ [Oboe] Stream closed with error:" << oboe::convertToText(error);
+
+    // Ни в коем случае не вызываем здесь initAudio() или reset() напрямую,
+    // так как внутренний поток Oboe еще завершает работу с этим объектом.
 }
 #endif
 // ============================================================================
@@ -1051,7 +1133,7 @@ void AudioEngine::setSpeakerLevel(int level, bool save, bool automatic) {
 
     // Рассчитываем абсолютную громкость на основе лимитов потока звонка
     //setAndroidAbsoluteSpeakerVolume(level * m_maxSpeakerLevel / 100.0f);
-    setSpeakerVolumePercentage(true, level, false);
+    setSpeakerVolumePercentage(true, level, false && useSpeakerPhone);
     if (save)
         saveConfigLevels();
 
@@ -1066,71 +1148,6 @@ void AudioEngine::setWriteToFile(bool w)
     m_writeToFile = w;
     qDebug() << "@@@sound setWriteToFile=" << w;
 }
-void AudioWorker::detectAndSuppressWhistle(short *samples, int count)
-{
-    if (count <= 0) return;
-
-    int zeroCrossings = 0;
-    int maxAmp = 0;
-
-    // 1. Считаем количество переходов через ноль и ищем пиковую амплитуду кадра
-    for (int i = 1; i < count; ++i) {
-        // Если знаки соседних сэмплов разные — волна пересекла ноль
-        if ((samples[i - 1] >= 0 && samples[i] < 0) || (samples[i - 1] < 0 && samples[i] >= 0)) {
-            zeroCrossings++;
-        }
-
-        int absSample = samples[i] < 0 ? -samples[i] : samples[i];
-        if (absSample > maxAmp) {
-            maxAmp = absSample;
-        }
-    }
-
-    // 2. Анализируем стабильность частоты (с допуском микро-погрешности в 3 перехода)
-    bool isFrequencyStable = (std::abs(zeroCrossings - m_lastZeroCrossings) <= 3);
-
-    // Порог тишины: детектор не должен срабатывать, если в комнате просто тихо (шумы ниже ~3% громкости)
-    bool isLoudEnough = (maxAmp > 1000);
-
-    if (isFrequencyStable && isLoudEnough && (maxAmp > m_lastMaxAmplitude)) {
-        // Амплитуда растет на одной и той же частоте! Накапливаем счетчик опасности
-        m_consecutiveGrowthFrames++;
-    } else {
-        // Естественное колебание речи или пауза — плавно сбрасываем счетчик
-        if (m_consecutiveGrowthFrames > 0) m_consecutiveGrowthFrames--;
-    }
-
-    // Сохраняем значения для следующего кадра
-    m_lastZeroCrossings = zeroCrossings;
-    m_lastMaxAmplitude = maxAmp;
-
-    // 3. РЕАКЦИЯ: Если звук монотонно растет 8 кадров подряд (~160 мс) — это начало свиста!
-    if (m_consecutiveGrowthFrames >= 8) {
-        qWarning() << "@@@ [DSP] Обнаружено начало развития свиста! Глушим поток. Пересечений нуля:" << zeroCrossings;
-
-        // Мгновенно зажимаем громкость до 15%, пресекая свист в зародыше
-        m_autoVolumeAttenuator = 0.15f;
-
-        // Сбрасываем счетчик, чтобы дать системе шанс перепроверить звук в следующем цикле
-        m_consecutiveGrowthFrames = 0;
-    }
-    else {
-        // Если свист прекратился, плавно (по 2% за кадр) возвращаем громкость к исходной,
-        // чтобы у пользователя не было ощущения резкого обрыва связи
-        if (m_autoVolumeAttenuator < 1.0f) {
-            m_autoVolumeAttenuator += 0.02f;
-            if (m_autoVolumeAttenuator > 1.0f) m_autoVolumeAttenuator = 1.0f;
-        }
-    }
-
-    // 4. Применяем наш динамический аттенюатор к текущим сэмплам
-    if (m_autoVolumeAttenuator < 1.0f) {
-        for (int i = 0; i < count; ++i) {
-            samples[i] = static_cast<short>(samples[i] * m_autoVolumeAttenuator);
-        }
-    }
-}
-
 void setAndroidSystemMicMute(bool mute) {
 #ifdef Q_OS_ANDROID
     QJniObject context = QNativeInterface::QAndroidApplication::context();
@@ -1234,8 +1251,10 @@ int getSpeakerVolumePercentage(bool voice) {
 }
 void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone) {
 #ifdef Q_OS_ANDROID
+    speakerphone = true;
+    qDebug() << "@@@sound setSpeakerVolumePercentage" << voice << percentage << speakerphone;
     if (!audioManager.isValid()) {
-        qWarning() << "AudioManager не инициализирован! Вызовите initAudioManager сначала.";
+        qWarning() << "@@@sound AudioManager не инициализирован! Вызовите initAudioManager сначала.";
         return;
     }
 
@@ -1268,7 +1287,7 @@ void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone) {
 
     // Защита: если операционная система вернула некорректное значение шкалы
     if (maxVol <= 0) {
-        qWarning() << "Не удалось получить максимальную громкость для потока:" << streamType;
+        qWarning() << "@@@sound Не удалось получить максимальную громкость для потока:" << streamType;
         return;
     }
 
@@ -1285,14 +1304,14 @@ void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone) {
         "(III)V",
         streamType,
         targetVolume,
-        0 // 0 означает скрытое изменение (без вывода системного ползунка на экран)
+        1 // 0 означает скрытое изменение (без вывода системного ползунка на экран)
         );
 
     // Проверяем JNI на исключения
     QJniEnvironment env;
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        qWarning() << "Ошибка: Исключение Android при изменении громкости или режима связи.";
+        qWarning() << "@@@sound Ошибка: Исключение Android при изменении громкости или режима связи.";
     }
 #else
     Q_UNUSED(voice);
@@ -1300,3 +1319,4 @@ void setSpeakerVolumePercentage(bool voice, int percentage, bool speakerphone) {
     Q_UNUSED(speakerphone);
 #endif
 }
+

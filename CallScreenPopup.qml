@@ -23,6 +23,7 @@ Popup {
 
     property int micLevel
     property int speakerLevel
+    property int attLevel
     property string callerName: ""
     property int callNetType: -1
     property bool isIncoming: true
@@ -35,6 +36,10 @@ Popup {
         micSpinBox.value = val
         micLevel = val
     }
+    function setAttVal(val){
+    attLevel = val
+    }
+
 
     // СВЯЗЫВАЕМ СИГНАЛЫ ЖИВОЙ ГРОМКОСТИ С ИНДИКАТОРАМИ VU-METER
     Connections {
@@ -158,7 +163,8 @@ Popup {
             Column {
                 spacing: 5
                 Text {
-                    text: "🔊 Звк: " + callScreenPopup.speakerLevel + "%"
+                    text: "" + callScreenPopup.speakerLevel + " " + callScreenPopup.attLevel
+//                    text: "🔊 Звк: " + callScreenPopup.speakerLevel + "%"
                     color: "#aaaaaa"
                     font.pixelSize: 12
                     font.weight: Font.Medium
@@ -498,5 +504,7 @@ Popup {
     onClosed: {
         remoteCheckbox.checked = false
         btnRecord1.checked = false
+        netEngine.stopAudioCall()
+        console.log ("@@@QML CallDialog closed");
     }
 }

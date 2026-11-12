@@ -26,7 +26,7 @@ extern int m_savedMicLevel, m_savedSpeakerLevel;
 extern int remoteMicLevel, remoteSpeakerLevel;
 extern int m_maxSpeakerLevel;
 extern int m_micLevel, m_speakerLevel;
-
+extern int globalSpeakerLevel;
 // ============================================================================
 // WORKER: Вся тяжелая логика звука, Opus, UDP и Oboe Callbacks
 // ============================================================================
@@ -71,7 +71,7 @@ signals:
     void speakerVolumeMeasured(int volume);
 
     void NotchChanged();
-
+    void attSpeakerChanged(float);
 private slots:
     void onReadyReadUdp();
     // Избавляемся от QTimer и readyRead() для микрофона на Android, Oboe пушит данные сам через onAudioReady
@@ -118,7 +118,6 @@ private:
     int m_lastZeroCrossings = 0;   // Предыдущее количество пересечений нуля
     int m_consecutiveGrowthFrames = 0; // Счетчик кадров непрерывного роста
     int m_lastMaxAmplitude = 0;    // Предыдущая максимальная амплитуда
-    float m_autoVolumeAttenuator = 1.0f; // Динамический множитель громкости (1.0 = норма, 0.2 = зажато)
     // Управление Notch-фильтром
     float m_notchFreq = 0.0f;      // Текущая обнаруженная частота свиста
 
@@ -145,7 +144,6 @@ private:
 
     float m_x1 = 0.0f, m_x2 = 0.0f;
     float m_y1 = 0.0f, m_y2 = 0.0f;
-    void detectAndSuppressWhistle(short *samples, int count);
 };
 
 // ============================================================================
@@ -194,6 +192,7 @@ signals:
     void writeToFileChanged();
     void remoteSetMicLevel(int);
     void remoteSetSpeakerLevel(int);
+    void showAttenuator(int);
 private:
     void readLevels();
 
@@ -203,10 +202,12 @@ private:
     void saveLevels (){m_savedMicLevel = m_micLevel; m_savedSpeakerLevel = m_speakerLevel;}
     void restoreLevels() {m_micLevel = m_savedMicLevel; m_speakerLevel = m_savedSpeakerLevel;}
     void saveConfigLevels();
+
     bool m_isEchoTestMode = false;
     QTimer speakerTimer;
 private slots:
     void onSpeakerTick();
+    void saveAttenuatedSpeakerLevel(float l);
 };
 
 void initAudioManager();
